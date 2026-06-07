@@ -48,6 +48,40 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     val connectionLogs: StateFlow<List<ConnectionLogEntity>> = repository.getRecentLogs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Guest Login States
+    private val sharedPrefs = application.getSharedPreferences("naw_talking_prefs", Context.MODE_PRIVATE)
+    val isLoggedIn = MutableStateFlow(sharedPrefs.getBoolean("is_logged_in", false))
+    val guestUsername = MutableStateFlow(sharedPrefs.getString("guest_username", "") ?: "")
+    val guestPassword = MutableStateFlow(sharedPrefs.getString("guest_password", "") ?: "")
+
+    fun loginGuest(user: String, pass: String) {
+        sharedPrefs.edit()
+            .putBoolean("is_logged_in", true)
+            .putString("guest_username", user)
+            .putString("guest_password", pass)
+            .apply()
+        isLoggedIn.value = true
+        guestUsername.value = user
+        guestPassword.value = pass
+        
+        // Refresh active members display name
+        _connectedChannel.value?.let { channel ->
+            spawnMockMembers(channel)
+        }
+    }
+
+    fun logout() {
+        sharedPrefs.edit()
+            .putBoolean("is_logged_in", false)
+            .remove("guest_username")
+            .remove("guest_password")
+            .apply()
+        isLoggedIn.value = false
+        guestUsername.value = ""
+        guestPassword.value = ""
+        leaveVoiceChannel()
+    }
+
     // UI Interactive States
     val selectedServer = MutableStateFlow<ServerEntity?>(null)
     
@@ -344,11 +378,12 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         stopSimulationJobs()
 
         // Spawn simulated members with high/low performance tags
+        val currentGuest = guestUsername.value.ifBlank { "Riley" }
         val candidates = listOf(
             ChannelMember("Alex 🎮", 0xFFAF52BE, false, "Performance", 12),
             ChannelMember("Taylor 🦊", 0xFFE91E63, false, "Eco Core", 28),
             ChannelMember("Jordan 🎧", 0xFF009688, false, "Legacy", 45),
-            ChannelMember("Riley (You)", 0xFF2196F3, false, "My Device", 10)
+            ChannelMember("$currentGuest (You)", 0xFF2196F3, false, "My Device", 10)
         )
 
         // Select 2-3 members based on channel default counts

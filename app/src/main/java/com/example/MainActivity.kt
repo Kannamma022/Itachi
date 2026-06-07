@@ -48,6 +48,7 @@ import com.example.data.ChannelEntity
 import com.example.data.ConnectionLogEntity
 import com.example.data.ServerEntity
 import com.example.ui.theme.*
+import com.example.ui.GuestLoginScreen
 import com.example.data.AppDatabase
 import kotlinx.coroutines.launch
 
@@ -142,6 +143,9 @@ fun VoiceChatAppScreen(
     val localBatteryInfo by viewModel.localBatteryInfo.collectAsStateWithLifecycle()
     val activeMembers by viewModel.activeMembers.collectAsStateWithLifecycle()
 
+    val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
+    val guestUsername by viewModel.guestUsername.collectAsStateWithLifecycle()
+
     // Permission handle
     var hasMicPermission by remember {
         mutableStateOf(
@@ -191,8 +195,11 @@ fun VoiceChatAppScreen(
 
     // Modal dialog trigger for creating voice servers
     var showCreateServerDialog by remember { mutableStateOf(false) }
+    var showInviteDialog by remember { mutableStateOf(false) }
+    var showLogoutConfirmation by remember { mutableStateOf(false) }
 
-    Row(modifier = modifier.fillMaxSize()) {
+    if (isLoggedIn) {
+        Row(modifier = modifier.fillMaxSize()) {
         
         // ----------------- COLUMN 1: DISCORD SERVER DRAWER (Left Bar, 64.dp) -----------------
         Column(
@@ -315,12 +322,16 @@ fun VoiceChatAppScreen(
                     .size(40.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.onSurfaceVariant)
-                    .border(2.dp, Color(0xFF23A55A), CircleShape),
+                    .border(2.dp, Color(0xFF23A55A), CircleShape)
+                    .clickable { showLogoutConfirmation = true }
+                    .testTag("profile_avatar_button"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "👤",
-                    fontSize = 16.sp
+                    text = guestUsername.firstOrNull()?.uppercase()?.toString() ?: "👤",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
         }
@@ -374,6 +385,30 @@ fun VoiceChatAppScreen(
                             letterSpacing = 1.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+
+                // Invite Button Option (Visual indicator)
+                if (selectedServer != null) {
+                    TextButton(
+                        onClick = { showInviteDialog = true },
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .testTag("invite_friends_header_button"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("👥", fontSize = 14.sp)
+                            Text("Invite", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 
@@ -1725,6 +1760,9 @@ fun VoiceChatAppScreen(
             }
         }
     }
+} else {
+    GuestLoginScreen(viewModel = viewModel, modifier = modifier)
+}
 
     // Modal dialog to implement custom Discord voice server creations locally
     if (showCreateServerDialog) {
@@ -1851,5 +1889,209 @@ fun VoiceChatAppScreen(
                 }
             }
         }
+    }
+
+    // Invite Dialog
+    if (showInviteDialog && selectedServer != null) {
+        val server = selectedServer!!
+        val inviteLink = "https://nawtalking.app/invite/${server.name.lowercase().replace(" ", "-")}-${server.id}"
+        var invitedFriends by remember { mutableStateOf(setOf<String>()) }
+
+        Dialog(onDismissRequest = { showInviteDialog = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .testTag("invite_friends_dialog"),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "👥 Invite Friends",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Server: ${server.name}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "SHAREABLE INVITATION LINK",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Gray,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = inviteLink,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp)
+                        )
+
+                        Text(
+                            text = "📋 Copy",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val clip = android.content.ClipData.newPlainText("Server Invite Link", inviteLink)
+                                    clipboard.setPrimaryClip(clip)
+                                    android.widget.Toast.makeText(context, "Link copied to clipboard! 🔗", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .testTag("copy_invite_link_button")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Text(
+                        text = "SELECT FRIENDS TO DIRECTLY INVITE",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Gray,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val friends = listOf(
+                        Pair("Naruto Uzumaki 🦊", "Online"),
+                        Pair("Sakura Haruno 🌸", "Idle"),
+                        Pair("Kakashi Hatake 🦅", "Coding"),
+                        Pair("Shisui Uchiha 🦅", "Training")
+                    )
+
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        friends.forEach { (friendName, status) ->
+                            val isInvited = invitedFriends.contains(friendName)
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = friendName,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = status,
+                                        fontSize = 10.sp,
+                                        color = if (status == "Online") Color(0xFF23A55A) else Color.Gray,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        if (!isInvited) {
+                                            invitedFriends = invitedFriends + friendName
+                                            android.widget.Toast.makeText(context, "Invitation sent to $friendName! 🌠", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isInvited) Color(0xFF23A55A) else MaterialTheme.colorScheme.primary,
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    modifier = Modifier
+                                        .height(30.dp)
+                                        .testTag("invite_button_${friendName.replace(" ", "_")}")
+                                ) {
+                                    Text(
+                                        text = if (isInvited) "Invited ✨" else "Invite",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { showInviteDialog = false },
+                            modifier = Modifier.testTag("close_invite_dialog")
+                        ) {
+                            Text("Cancel", color = Color.Gray)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Logout Dialog Confirmation
+    if (showLogoutConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirmation = false },
+            title = { Text("Logout Profile") },
+            text = { Text("Are you sure you want to sign out from guest account '$guestUsername'?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLogoutConfirmation = false
+                        viewModel.logout()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Logout", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirmation = false }) {
+                    Text("Cancel")
+                }
+            },
+            modifier = Modifier.testTag("logout_confirmation_dialog")
+        )
     }
 }
