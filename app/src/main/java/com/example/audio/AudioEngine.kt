@@ -30,6 +30,7 @@ class AudioEngine(private val context: Context) {
     private var isEcoCanvasMode = false
     private var isGameBoosterEnabled = false
     private var isNoiseSuppressionEnabled = true
+    private var currentNoiseProfile = "STANDARD" // "OFF", "STANDARD", "FAN", "AC", "WASHING", "MIXER"
 
     // State flows for UI update
     private val _amplitude = MutableStateFlow(0f)
@@ -49,6 +50,20 @@ class AudioEngine(private val context: Context) {
 
     private val _isNoiseSuppressionActive = MutableStateFlow(true)
     val isNoiseSuppressionActive: StateFlow<Boolean> = _isNoiseSuppressionActive
+
+    private val _activeNoiseProfile = MutableStateFlow("STANDARD")
+    val activeNoiseProfile: StateFlow<String> = _activeNoiseProfile
+
+    private val _voiceActivationThreshold = MutableStateFlow(0.12f) // default sensitivity setting
+    val voiceActivationThreshold: StateFlow<Float> = _voiceActivationThreshold
+
+    /**
+     * Updates the sensitivity threshold for voice activation gating (0.0f - 1.0f range).
+     */
+    fun setVoiceActivationThreshold(value: Float) {
+        _voiceActivationThreshold.value = value.coerceIn(0f, 1f)
+        Log.d(TAG, "Voice activation threshold set to: $value")
+    }
 
     // Active scopes & threads
     private var audioJob: Job? = null
@@ -120,48 +135,256 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
+     * Toggles the dynamic appliance noise cancellation profile.
+     */
+    fun setNoiseProfile(profile: String) {
+        if (this.currentNoiseProfile != profile) {
+            this.currentNoiseProfile = profile
+            _activeNoiseProfile.value = profile
+            Log.d(TAG, "Noise profile changed to: $profile")
+        }
+    }
+
+    // DSP filtering states reusable across blocks
+    private val svFilter = SVFilter()
+    private var noiseFloorEstimate = 400.0
+    private var continuousHumCounter = 0
+
+    /**
      * Real-time software Noise Suppression and Keyboard Click Filter.
      * Processes 16-bit PCM buffer (ShortArray) in-place.
      */
     private fun processNoiseSuppression(buffer: ShortArray, size: Int) {
-        if (!isNoiseSuppressionEnabled) return
+        if (!isNoiseSuppressionEnabled || currentNoiseProfile == "OFF") return
 
-        // 1. Noise Gate: Checks if average amplitude is below threshold
-        var sum = 0.0
+        // 1. Calculate Block Energy (RMS) to track live noise envelopes
+        var sumSq = 0.0
         for (i in 0 until size) {
             val sample = buffer[i].toDouble()
-            sum += sample * sample
+            sumSq += sample * sample
         }
-        val rms = sqrt(sum / size)
+        val rms = sqrt(sumSq / size)
 
-        // Gate threshold. Slightly adjusted depending on game booster mode state
-        val gateThreshold = if (isGameBoosterEnabled) 380.0 else 480.0
-        val reductionFactor = 0.04f // 96% noise volume reduction
+        // Slow running average tracker of background silent noise Floor
+        if (rms < 900.0) {
+            noiseFloorEstimate = noiseFloorEstimate * 0.95 + rms * 0.05
+        }
 
-        if (rms < gateThreshold) {
-            // Noise gate closed: damp click transients and noise hum completely
+        // Apply adjustable dynamic voice activation threshold gate globally
+        val normalizedRms = (rms / 32768.0).toFloat().coerceIn(0f, 1f)
+        if (normalizedRms < _voiceActivationThreshold.value) {
+            val gateReduction = 0.02f // 98% damp attenuation to block out background room noise completely
             for (i in 0 until size) {
-                buffer[i] = (buffer[i] * reductionFactor).toInt().toShort()
+                buffer[i] = (buffer[i] * gateReduction).toInt().toShort()
             }
-        } else {
-            // 2. Keyboard Peak Squelch Filter (Transient Shaper for click reduction)
-            // Mechanical switches and key clacks produce prominent swift transient spikes.
-            var absoluteSum = 0.0
-            for (i in 0 until size) {
-                absoluteSum += Math.abs(buffer[i].toDouble())
-            }
-            val averageAbs = absoluteSum / size
+            return // Gated out early
+        }
 
-            // Clamp isolated, sharp high-frequency transient spikes
-            val clickFactor = 5.0
-            for (i in 0 until size) {
-                val absoluteVal = Math.abs(buffer[i].toInt())
-                if (absoluteVal > averageAbs * clickFactor && absoluteVal > 1200) {
-                    val sign = if (buffer[i] < 0) -1 else 1
-                    // Damp the clicking spike to avoid background chatter bleeding in
-                    buffer[i] = (averageAbs * clickFactor * sign).toInt().toShort()
+        when (currentNoiseProfile) {
+            "STANDARD" -> {
+                // Gate threshold. Slightly adjusted depending on game booster mode state
+                val gateThreshold = if (isGameBoosterEnabled) 380.0 else 480.0
+                val reductionFactor = 0.04f // 96% noise volume reduction
+
+                if (rms < gateThreshold) {
+                    for (i in 0 until size) {
+                        buffer[i] = (buffer[i] * reductionFactor).toInt().toShort()
+                    }
+                } else {
+                    // Keyboard Peak Squelch Filter
+                    var absoluteSum = 0.0
+                    for (i in 0 until size) {
+                        absoluteSum += Math.abs(buffer[i].toDouble())
+                    }
+                    val averageAbs = absoluteSum / size
+                    val clickFactor = 5.0
+                    for (i in 0 until size) {
+                        val absoluteVal = Math.abs(buffer[i].toInt())
+                        if (absoluteVal > averageAbs * clickFactor && absoluteVal > 1200) {
+                            val sign = if (buffer[i] < 0) -1 else 1
+                            buffer[i] = (averageAbs * clickFactor * sign).toInt().toShort()
+                        }
+                    }
                 }
             }
+            "FAN" -> {
+                // Fan noise consists of low frequency heavy vibrations (50Hz hum up to 250Hz frequency).
+                // 1. Apply active High-Pass Filter with steep 24dB/oct cutoff at 320Hz to eliminate mechanical hum
+                svFilter.setupHighPass(320f, sampleRate.toFloat(), 0.707f)
+                for (i in 0 until size) {
+                    val filtered = svFilter.processHighPass(buffer[i].toFloat())
+                    buffer[i] = filtered.coerceIn(-32768f, 32767f).toInt().toShort()
+                }
+
+                // 2. Track steady continuous signals (hums) and compress the absolute amplitude
+                val closeness = Math.abs(rms - noiseFloorEstimate)
+                if (closeness < 220.0 && rms < 1600.0) {
+                    continuousHumCounter++
+                    if (continuousHumCounter > 4) {
+                        // Suppress quiet stationary fan drone completely
+                        val dampFactor = 0.08f
+                        for (i in 0 until size) {
+                            buffer[i] = (buffer[i] * dampFactor).toInt().toShort()
+                        }
+                    }
+                } else {
+                    continuousHumCounter = 0
+                }
+            }
+            "AC" -> {
+                // Air Conditioners create low rumble combined with a continuous rushing wind hiss (broadband noise).
+                // 1. Constrain frequency bandwidth strictly to human voice vocal formants (300Hz to 3300Hz)
+                svFilter.setupBandPass(300f, 3300f, sampleRate.toFloat())
+                for (i in 0 until size) {
+                    val filtered = svFilter.processBandPass(buffer[i].toFloat())
+                    buffer[i] = filtered.coerceIn(-32768f, 32767f).toInt().toShort()
+                }
+
+                // 2. Continuous Spectral Subtraction gate
+                val threshold = noiseFloorEstimate * 2.3 + 300.0
+                if (rms < threshold) {
+                    // Entirely drown remaining wind breeze hiss during silence
+                    val dampFactor = (rms / threshold).toFloat().coerceIn(0.01f, 0.4f)
+                    for (i in 0 until size) {
+                        buffer[i] = (buffer[i] * dampFactor).toInt().toShort()
+                    }
+                } else {
+                    // Suppress air floor noise during speech segments by scaling dynamic range
+                    val scaleFactor = 0.82f
+                    for (i in 0 until size) {
+                        buffer[i] = (buffer[i] * scaleFactor).toInt().toShort()
+                    }
+                }
+            }
+            "WASHING" -> {
+                // Washing machines combine periodic high-energy thuds (40Hz-100Hz gravity splash) and high-frequency spin spray clicks.
+                // 1. Restrict bandwidth tightly to major vocal structures (350Hz - 2400Hz)
+                svFilter.setupBandPass(350f, 2400f, sampleRate.toFloat())
+                for (i in 0 until size) {
+                    val filtered = svFilter.processBandPass(buffer[i].toFloat())
+                    buffer[i] = filtered.coerceIn(-32768f, 32767f).toInt().toShort()
+                }
+
+                // 2. Dynamic Transient Limiter for drum clatter and spinning sloshes
+                var absoluteSum = 0.0
+                for (i in 0 until size) {
+                    absoluteSum += Math.abs(buffer[i].toDouble())
+                }
+                val avgAbs = absoluteSum / size
+                val crestLimit = (avgAbs * 3.4).coerceAtLeast(800.0)
+
+                for (i in 0 until size) {
+                    val sampleVal = buffer[i].toInt()
+                    if (Math.abs(sampleVal) > crestLimit) {
+                        val sign = if (sampleVal < 0) -1 else 1
+                        buffer[i] = (crestLimit * sign).toInt().toShort()
+                    }
+                }
+
+                // 3. Noise expander for idle periods
+                if (rms < 850.0) {
+                    for (i in 0 until size) {
+                        buffer[i] = (buffer[i] * 0.05f).toInt().toShort()
+                    }
+                }
+            }
+            "MIXER" -> {
+                // Kitchen blender jars generate screeching mechanical grinds and whining motor gears (1kHz - 8kHz up to 90dB).
+                // 1. Extreme bandpass heavily attenuating everything above 1200Hz to preserve raw vowels and filter ear-splitting screeches
+                svFilter.setupBandPass(250f, 1200f, sampleRate.toFloat())
+                for (i in 0 until size) {
+                    val filtered = svFilter.processBandPass(buffer[i].toFloat())
+                    buffer[i] = filtered.coerceIn(-32768f, 32767f).toInt().toShort()
+                }
+
+                // 2. High Frequency derivative Slew-Rate Limiter (Dynamic de-esser & motor grinder dissolved)
+                var prevSample = 0
+                val lowPassBlend = 0.35f
+                for (i in 0 until size) {
+                    val currentSample = buffer[i].toInt()
+                    val smoothed = (currentSample * lowPassBlend + prevSample * (1f - lowPassBlend)).toInt().toShort()
+                    buffer[i] = smoothed
+                    prevSample = smoothed.toInt()
+                }
+
+                // 3. Aggressive Downward Squelch Gate
+                val speechCheckThreshold = 2200.0
+                if (rms < speechCheckThreshold) {
+                    // Suppress screaming motors completely when not active talking
+                    for (i in 0 until size) {
+                        buffer[i] = (buffer[i] * 0.02f).toInt().toShort()
+                    }
+                } else {
+                    // Compress voice signals to hold the volume clear over remaining background whine
+                    for (i in 0 until size) {
+                        buffer[i] = (buffer[i] * 0.45f).toInt().toShort()
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Chamberlin State-Variable-Filter (SVF) Cascade.
+     * High-performance, fast, sample-rate independent dual-stage filter.
+     */
+    private class SVFilter {
+        private var low1 = 0f
+        private var band1 = 0f
+        private var low2 = 0f
+        private var band2 = 0f
+
+        private var fHigh = 0.1f
+        private var fLow = 0.1f
+        private var q = 0.707f
+
+        fun setupHighPass(cutoffHz: Float, sampleRate: Float, qFactor: Float = 0.707f) {
+            val angle = Math.PI * cutoffHz.toDouble() / sampleRate.toDouble()
+            fLow = (2.0 * Math.sin(angle)).toFloat().coerceIn(0f, 1f)
+            q = (1.0 / qFactor.toDouble()).toFloat()
+        }
+
+        fun setupBandPass(lowCutoffHz: Float, highCutoffHz: Float, sampleRate: Float, qFactor: Float = 0.707f) {
+            val angleLow = Math.PI * lowCutoffHz.toDouble() / sampleRate.toDouble()
+            fLow = (2.0 * Math.sin(angleLow)).toFloat().coerceIn(0f, 1f)
+
+            val angleHigh = Math.PI * highCutoffHz.toDouble() / sampleRate.toDouble()
+            fHigh = (2.0 * Math.sin(angleHigh)).toFloat().coerceIn(0f, 1f)
+            q = (1.0 / qFactor.toDouble()).toFloat()
+        }
+
+        fun configure(sampleRate: Int) {
+            // Keep state helper
+        }
+
+        fun processHighPass(input: Float): Float {
+            // Stage 1
+            val h1 = input - low1 - q * band1
+            band1 = fLow * h1 + band1
+            low1 = fLow * band1 + low1
+            
+            // Stage 2
+            val h2 = h1 - low2 - q * band2
+            band2 = fLow * h2 + band2
+            low2 = fLow * band2 + low2
+
+            return h2
+        }
+
+        fun processBandPass(input: Float): Float {
+            // Highpass stage
+            val h1 = input - low1 - q * band1
+            band1 = fLow * h1 + band1
+            low1 = fLow * band1 + low1
+            val hpSignal = h1
+
+            // Lowpass stage
+            val h2 = hpSignal - low2 - q * band2
+            band2 = fHigh * h2 + band2
+            low2 = fHigh * band2 + low2
+            val lpSignal = low2
+
+            return lpSignal
         }
     }
 
@@ -327,7 +550,14 @@ class AudioEngine(private val context: Context) {
                 // Add minor random noise to make visualizer live and interesting
                 val noise = (Math.random() * 0.15).toFloat()
                 val signal = (Math.sin(degree.toDouble()).toFloat() * 0.45f + 0.5f).coerceIn(0f, 1f)
-                _amplitude.value = (signal * 0.7f + noise * 0.3f).coerceIn(0f, 1f)
+                val rawValue = (signal * 0.7f + noise * 0.3f).coerceIn(0f, 1f)
+                
+                // If it falls below voice activation sensitivity threshold, gate it out completely
+                if (rawValue < _voiceActivationThreshold.value) {
+                    _amplitude.value = rawValue * 0.02f // gated out dampening
+                } else {
+                    _amplitude.value = rawValue
+                }
             } else {
                 _amplitude.value = 0f
             }

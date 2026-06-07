@@ -111,6 +111,8 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     val isEcoOptimizationActive = MutableStateFlow(false) // toggle eco graphics & animations
     val isGameBoosterEnabled = MutableStateFlow(false) // Real-time ultra low jitter booster for gaming
     val isNoiseSuppressionEnabledByUI = audioEngine.isNoiseSuppressionActive // Real-time noise suppressor and keyboard click filter
+    val activeNoiseProfile = audioEngine.activeNoiseProfile // "OFF", "STANDARD", "FAN", "AC", "WASHING", "MIXER"
+    val voiceActivationThreshold = audioEngine.voiceActivationThreshold // Voice activation sensitivity threshold
     val performanceMode = MutableStateFlow("Ultra Eco") // "Ultra Eco", "Balanced", "Fidelity", "Zero-Lag Game Mode"
 
     // Real-time battery diagnostic stats
@@ -120,6 +122,28 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     val microphoneVolume = audioEngine.amplitude
     val nativeBufferInfo = audioEngine.nativeBufferInfo
     val threadProcessTimeUs = audioEngine.bufferUsageUs
+
+    val isAnimeModeEnabled = MutableStateFlow(true)
+    val activeAnimeSkin = MutableStateFlow<com.example.data.AnimeCharacter?>(null)
+
+    fun toggleAnimeMode() {
+        isAnimeModeEnabled.value = !isAnimeModeEnabled.value
+        _connectedChannel.value?.let { channel ->
+            spawnMockMembers(channel)
+        }
+    }
+
+    fun selectAnimeSkin(character: com.example.data.AnimeCharacter?) {
+        activeAnimeSkin.value = character
+        if (character != null) {
+            com.example.audio.WaterDropSoundManager.playAnimeAura(character.soundFrequencyStart, character.soundFrequencyEnd)
+        } else {
+            com.example.audio.WaterDropSoundManager.playUnmute()
+        }
+        _connectedChannel.value?.let { channel ->
+            spawnMockMembers(channel)
+        }
+    }
 
     // Channel Member Simulations
     private val _activeMembers = MutableStateFlow<List<ChannelMember>>(emptyList())
@@ -178,6 +202,9 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
             delay(150) // connection overhead
             connectionLatency.value = mockPing
             _connectionStatus.value = "Connected"
+            
+            // Trigger the organic synthesized double water drop sound effect
+            com.example.audio.WaterDropSoundManager.playJoin()
 
             // Log connection data gracefully into the Room database
             logConnectEvent(channel, mockPing)
@@ -209,6 +236,9 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
             audioEngine.stop()
             stopSimulationJobs()
             dismissNotification()
+            
+            // Trigger the organic synthesized descending water drop sound effect
+            com.example.audio.WaterDropSoundManager.playLeave()
         }
     }
 
@@ -238,6 +268,11 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleMute() {
         isMuted.value = !isMuted.value
         applyAudioEngineMute()
+        if (isMuted.value) {
+            com.example.audio.WaterDropSoundManager.playMute()
+        } else {
+            com.example.audio.WaterDropSoundManager.playUnmute()
+        }
     }
 
     /**
@@ -249,8 +284,10 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         if (!current) {
             // Deafening also mutes microphone to prevent echo
             isMuted.value = true
+            com.example.audio.WaterDropSoundManager.playMute()
         } else {
             isMuted.value = false
+            com.example.audio.WaterDropSoundManager.playUnmute()
         }
         applyAudioEngineMute()
     }
@@ -328,6 +365,20 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Dynamic noise profiles addressing typical background appliances
+     */
+    fun setNoiseProfile(profile: String) {
+        audioEngine.setNoiseProfile(profile)
+    }
+
+    /**
+     * Updates the sensitivity threshold for voice activation (0f to 1f)
+     */
+    fun setVoiceActivationThreshold(value: Float) {
+        audioEngine.setVoiceActivationThreshold(value)
+    }
+
+    /**
      * Change audio rate and codecs to demonstrate retro / high-performance tradeoffs.
      */
     fun changeAudioConfiguration(rate: Int, ecoEnabled: Boolean, bitrateKbps: Int) {
@@ -379,22 +430,40 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
 
         // Spawn simulated members with high/low performance tags
         val currentGuest = guestUsername.value.ifBlank { "Riley" }
-        val candidates = listOf(
-            ChannelMember("Alex 🎮", 0xFFAF52BE, false, "Performance", 12),
-            ChannelMember("Taylor 🦊", 0xFFE91E63, false, "Eco Core", 28),
-            ChannelMember("Jordan 🎧", 0xFF009688, false, "Legacy", 45),
-            ChannelMember("$currentGuest (You)", 0xFF2196F3, false, "My Device", 10)
-        )
+        val activeSkin = activeAnimeSkin.value
+
+        val candidates = if (isAnimeModeEnabled.value) {
+            listOf(
+                ChannelMember("Satoru Gojo 🤞🌌", 0xFF8B5CF6, false, "Limitless Void", 3),
+                ChannelMember("Naruto Uzumaki 🦊🍥", 0xFFF97316, false, "Nine-Tails Sage", 16),
+                ChannelMember("Luffy Gear 5 👒🍖", 0xFFFFD700, false, "Sun God Nika", 10),
+                ChannelMember("Anya Forger 🥜✨", 0xFFEC4899, false, "Mind Telepathy", 42),
+                ChannelMember("Son Goku ☄️🐉", 0xFF06B6D4, false, "Ultra Instinct", 4),
+                ChannelMember("Tanjiro Kamado 🌊⚔️", 0xFFEF4444, false, "Sun Breathing", 19),
+                ChannelMember("Roronoa Zoro ⚔️🟢", 0xFF10B981, false, "Three-Sword", 21),
+                ChannelMember("Sailor Moon 🌙🎀", 0xFFFF69B4, false, "Moon Guardian", 28),
+                ChannelMember(
+                    if (activeSkin != null) "${activeSkin.emoji} ${activeSkin.name} (You)" else "$currentGuest (You)",
+                    activeSkin?.auraColor ?: 0xFF2196F3,
+                    false,
+                    activeSkin?.auraName ?: "My Device",
+                    12
+                )
+            )
+        } else {
+            listOf(
+                ChannelMember("Alex 🎮", 0xFFAF52BE, false, "Performance", 12),
+                ChannelMember("Taylor 🦊", 0xFFE91E63, false, "Eco Core", 28),
+                ChannelMember("Jordan 🎧", 0xFF009688, false, "Legacy", 45),
+                ChannelMember("$currentGuest (You)", 0xFF2196F3, false, "My Device", 10)
+            )
+        }
 
         // Select 2-3 members based on channel default counts
-        val subCount = channel.onlineCount.coerceAtMost(candidates.size).coerceAtLeast(1)
-        val selected = candidates.shuffled().take(subCount).toMutableList()
-
-        // Always put "Riley (You)" inside
-        if (selected.none { it.name.contains("(You)") }) {
-            selected.removeAt(selected.size - 1)
-            selected.add(candidates.last())
-        }
+        val subCount = channel.onlineCount.coerceAtMost(candidates.size - 1).coerceAtLeast(1)
+        val otherCandidates = candidates.filter { !it.name.contains("(You)") }
+        val selected = otherCandidates.shuffled().take(subCount).toMutableList()
+        selected.add(candidates.last())
 
         _activeMembers.value = selected
 

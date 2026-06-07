@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">NAW TALKING APP</string>
+    <string name="attribution_label">Voice stream and notification tracking</string>
 </resources>

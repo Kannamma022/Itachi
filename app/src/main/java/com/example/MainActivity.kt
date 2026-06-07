@@ -24,10 +24,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -134,6 +137,10 @@ fun VoiceChatAppScreen(
     val ecoOptimizationActive by viewModel.isEcoOptimizationActive.collectAsStateWithLifecycle()
     val isGameBoosterEnabled by viewModel.isGameBoosterEnabled.collectAsStateWithLifecycle()
     val isNoiseSuppressionEnabled by viewModel.isNoiseSuppressionEnabledByUI.collectAsStateWithLifecycle()
+    val activeNoiseProfile by viewModel.activeNoiseProfile.collectAsStateWithLifecycle()
+    val voiceActivationThreshold by viewModel.voiceActivationThreshold.collectAsStateWithLifecycle()
+    val isAnimeModeEnabled by viewModel.isAnimeModeEnabled.collectAsStateWithLifecycle()
+    val activeAnimeSkin by viewModel.activeAnimeSkin.collectAsStateWithLifecycle()
     val isPushToTalkEnabled by viewModel.isPushToTalkEnabled.collectAsStateWithLifecycle()
     val isPushToTalkActive by viewModel.isPushToTalkActive.collectAsStateWithLifecycle()
     val pttTriggerKey by viewModel.pttTriggerKey.collectAsStateWithLifecycle()
@@ -345,21 +352,55 @@ fun VoiceChatAppScreen(
         )
 
         // ----------------- COLUMN 2: SERVER DETAIL / VOICE CHANNELS AREA (Middle/Right) -----------------
-        Column(
+        val serverBgRes = when (selectedServer?.name) {
+            "Konoha Leaf Village" -> R.drawable.img_naruto_bg_1780850474316
+            "Uchiha Sanctuary" -> R.drawable.img_sasuke_bg_1780850489028
+            "Akatsuki Fortress" -> R.drawable.img_itachi_bg_1780850504775
+            "Madara's Infinite Realm" -> R.drawable.img_madara_bg_1780850520399
+            else -> null
+        }
+
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.background)
+                .background(Color(0xFF0D061A))
         ) {
-            
-            // Channel Header Toolbar
-            Row(
+            if (serverBgRes != null) {
+                Image(
+                    painter = painterResource(id = serverBgRes),
+                    contentDescription = "Anime Character Background",
+                    modifier = Modifier.fillMaxSize().alpha(0.18f),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xFF0D061A).copy(alpha = 0.5f),
+                                    Color(0xFF0D061A).copy(alpha = 0.95f)
+                                )
+                            )
+                        )
+                )
+            }
+
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .background(Color.Transparent)
             ) {
+                
+                // Channel Header Toolbar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Transparent)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = selectedServer?.name ?: "No Server Active",
@@ -511,107 +552,7 @@ fun VoiceChatAppScreen(
                     .padding(horizontal = 14.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Beautiful Fun Sasuke and Itachi Thematic Banner Card
-                item {
-                    val quotes = listOf(
-                        "Itachi: 'We are unique brothers. I will always be there for you, even if it's just as an obstacle for you to overcome.' ⚡",
-                        "Sasuke: 'I am a defender of the Leaf, big brother, let's keep our voice latency synchronized!' 🗡️",
-                        "Itachi: 'Forgive me Sasuke... next time I'll join your guild.' 👉🌸",
-                        "Sasuke: 'Toggle the acoustic filters, Itachi. Your mechanical keyboard clicking is too loud!' 🎙️"
-                    )
-                    var activeQuoteIndex by remember { mutableStateOf(0) }
-
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF1E112A) // Mystical deep purple to reflect Sasuke's chakra / Uchiha theme
-                        ),
-                        border = BorderStroke(1.5.dp, Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))))
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            // Header Row
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "🌸 Uchiha Brotherhood Lounge",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFE9D5FF)
-                                    )
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFFFFB0B0).copy(alpha = 0.15f))
-                                        .border(0.5.dp, Color(0xFFFF8080), RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            activeQuoteIndex = (activeQuoteIndex + 1) % quotes.size
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "Next Moment 🤜",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFFF8080)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Large image display
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.Black)
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.img_brothers_talking_1780777560391),
-                                    contentDescription = "Sasuke and Itachi moment",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                                // Shadow Gradient
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(
-                                            Brush.verticalGradient(
-                                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
-                                            )
-                                        )
-                                )
-                                // Overlaid funny text bubble
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .padding(10.dp)
-                                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
-                                        .padding(8.dp)
-                                ) {
-                                    Text(
-                                        text = quotes[activeQuoteIndex],
-                                        fontSize = 11.sp,
-                                        color = Color.White,
-                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                        lineHeight = 14.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                       // Dynamic list of active Channels grouped in a beautiful Card (Clean Minimalism Design HTML structure)
+                // Dynamic list of active Channels grouped in a beautiful Card (Clean Minimalism Design HTML structure)
                 item {
                     val activeCount = channelList.count { connectedChannel?.id == it.id }
                     Card(
@@ -746,31 +687,81 @@ fun VoiceChatAppScreen(
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 activeMembers.forEach { member ->
+                                                    val infiniteTransition = rememberInfiniteTransition(label = "audio_ripple")
+                                                    val auraScale by infiniteTransition.animateFloat(
+                                                        initialValue = 1.0f,
+                                                        targetValue = 1.6f,
+                                                        animationSpec = infiniteRepeatable(
+                                                            animation = tween(1100, easing = LinearEasing),
+                                                            repeatMode = RepeatMode.Restart
+                                                        ),
+                                                        label = "scale"
+                                                    )
+                                                    val auraAlpha by infiniteTransition.animateFloat(
+                                                        initialValue = 0.8f,
+                                                        targetValue = 0.0f,
+                                                        animationSpec = infiniteRepeatable(
+                                                            animation = tween(1100, easing = LinearEasing),
+                                                            repeatMode = RepeatMode.Restart
+                                                        ),
+                                                        label = "alpha"
+                                                    )
+
                                                     Row(
                                                         verticalAlignment = Alignment.CenterVertically,
                                                         modifier = Modifier
                                                             .fillMaxWidth()
-                                                            .background(Color.White.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                                            .background(
+                                                                if (isAnimeModeEnabled) Color(0xFF1C132E).copy(alpha = 0.7f) 
+                                                                else Color.White.copy(alpha = 0.5f), 
+                                                                RoundedCornerShape(12.dp)
+                                                            )
+                                                            .border(
+                                                                width = 1.dp,
+                                                                color = if (member.isSpeaking && isAnimeModeEnabled) Color(member.avatarColor).copy(alpha = 0.5f)
+                                                                        else Color.Transparent,
+                                                                shape = RoundedCornerShape(12.dp)
+                                                            )
                                                             .padding(horizontal = 8.dp, vertical = 6.dp)
                                                     ) {
                                                         Box(
-                                                            modifier = Modifier
-                                                                .size(20.dp)
-                                                                .clip(CircleShape)
-                                                                .background(Color(member.avatarColor))
-                                                                .border(
-                                                                    width = if (member.isSpeaking) 1.5.dp else 0.dp,
-                                                                    color = if (member.isSpeaking) Color(0xFF23A55A) else Color.Transparent,
-                                                                    shape = CircleShape
-                                                                ),
-                                                            contentAlignment = Alignment.Center
+                                                            contentAlignment = Alignment.Center,
+                                                            modifier = Modifier.size(24.dp)
                                                         ) {
-                                                            Text(
-                                                                text = member.name.take(1),
-                                                                fontSize = 9.sp,
-                                                                color = Color.White,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
+                                                            if (member.isSpeaking && isAnimeModeEnabled) {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .size(20.dp)
+                                                                        .graphicsLayer {
+                                                                            scaleX = auraScale
+                                                                            scaleY = auraScale
+                                                                            alpha = auraAlpha
+                                                                        }
+                                                                        .clip(CircleShape)
+                                                                        .background(Color(member.avatarColor))
+                                                                )
+                                                            }
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(20.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(Color(member.avatarColor))
+                                                                    .border(
+                                                                        width = if (member.isSpeaking) 1.5.dp else 0.dp,
+                                                                        color = if (member.isSpeaking) {
+                                                                            if (isAnimeModeEnabled) Color(member.avatarColor) else Color(0xFF23A55A)
+                                                                        } else Color.Transparent,
+                                                                        shape = CircleShape
+                                                                    ),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Text(
+                                                                    text = member.name.take(1),
+                                                                    fontSize = 9.sp,
+                                                                    color = Color.White,
+                                                                    fontWeight = FontWeight.Bold
+                                                                )
+                                                            }
                                                         }
 
                                                         Spacer(modifier = Modifier.width(8.dp))
@@ -778,7 +769,11 @@ fun VoiceChatAppScreen(
                                                         Text(
                                                             text = member.name,
                                                             fontSize = 12.sp,
-                                                            color = if (member.isSpeaking) Color(0xFF23A55A) else MaterialTheme.colorScheme.onSecondary,
+                                                            color = if (member.isSpeaking) {
+                                                                if (isAnimeModeEnabled) Color(member.avatarColor) else Color(0xFF23A55A)
+                                                            } else {
+                                                                if (isAnimeModeEnabled) Color.White else MaterialTheme.colorScheme.onSecondary
+                                                            },
                                                             fontWeight = if (member.isSpeaking) FontWeight.Bold else FontWeight.Normal,
                                                             modifier = Modifier.weight(1f)
                                                         )
@@ -786,7 +781,7 @@ fun VoiceChatAppScreen(
                                                         Text(
                                                             text = "${member.deviceStatus} • ${member.latencyMs}ms",
                                                             fontSize = 9.sp,
-                                                            color = MaterialTheme.colorScheme.onSecondary.copy(alpha = 0.6f)
+                                                            color = if (isAnimeModeEnabled) Color(0xFFA78BFA).copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSecondary.copy(alpha = 0.6f)
                                                         )
                                                     }
                                                 }
@@ -1126,13 +1121,130 @@ fun VoiceChatAppScreen(
                             Spacer(modifier = Modifier.height(6.dp))
                             
                             Text(
-                                text = "Combines native hardware Acoustic Noise Cancellation (ANC) with a digital spectral gate. Real-time sub-millisecond envelope tracking limits keyboard mouse clicks, background machine hums, and AC fan noise so other gamers only hear your voice.",
+                                text = "Combines native hardware Acoustic Noise Cancellation (ANC) with a digital spectral biquad cascade state-variable gate. Real-time sub-millisecond envelope tracking limits keyboard mouse clicks, background machine hums, and AC fan noise so other gamers only hear your voice.",
                                 fontSize = 11.sp,
                                 color = if (isNoiseSuppressionEnabled) Color.White.copy(alpha = 0.9f) else Color.Gray,
                                 lineHeight = 14.sp
                             )
                             
-                            Spacer(modifier = Modifier.height(10.dp))
+                            if (isNoiseSuppressionEnabled) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "SELECT APPLIANCE DSP PROFILE:",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF60A5FA),
+                                    letterSpacing = 1.sp
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                
+                                val profilesList = listOf(
+                                    Pair("STANDARD", "🎙️ Standard"),
+                                    Pair("FAN", "💨 Fan Hum"),
+                                    Pair("AC", "❄️ AC Hiss"),
+                                    Pair("WASHING", "🧼 Washer"),
+                                    Pair("MIXER", "🌪️ Mixer/Jar")
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    profilesList.forEach { (profileKey, label) ->
+                                        val isSelected = activeNoiseProfile == profileKey
+                                        val containerCol = if (isSelected) Color(0xFF3B82F6) else Color.Black.copy(alpha = 0.3f)
+                                        val textCol = if (isSelected) Color.White else Color.LightGray
+                                        val borderCol = if (isSelected) Color(0xFF60A5FA) else Color.Gray.copy(alpha = 0.3f)
+
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(containerCol)
+                                                .border(1.dp, borderCol, RoundedCornerShape(10.dp))
+                                                .clickable { viewModel.setNoiseProfile(profileKey) }
+                                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                                .testTag("noise_profile_chip_$profileKey"),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = textCol
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                val explanationText = when (activeNoiseProfile) {
+                                    "STANDARD" -> "Standard noise gate & keyboard transient squelch limits background mouse click and low chatter."
+                                    "FAN" -> "High-pass filter at 320Hz + live envelope hum tracking completely isolates ceiling fan/AC motor drones."
+                                    "AC" -> "Strict telecom band-limit (300Hz-3.3kHz) + continuous spectral subtraction. Perfect for rushing wind AC hiss."
+                                    "WASHING" -> "Vocal structure isolation + crest limit transient soft clips heavy washing machine spinning sloshes & metallic clangs."
+                                    "MIXER" -> "Aggressive 1.2kHz lowpass filter + slew-rate differentiation limits. Drowns ear-splitting blenders/grinders."
+                                    else -> ""
+                                }
+                                if (explanationText.isNotEmpty()) {
+                                    Text(
+                                        text = explanationText,
+                                        fontSize = 11.sp,
+                                        color = Color.LightGray.copy(alpha = 0.8f),
+                                        lineHeight = 14.sp,
+                                        modifier = Modifier.padding(horizontal = 2.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Text(
+                                    text = "🎛️ VOICE ACTIVATION SENSITIVITY:",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF60A5FA),
+                                    letterSpacing = 1.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Set the threshold envelope target. Signals quieter than this will be gated out entirely. Current: ${(voiceActivationThreshold * 100).toInt()}%",
+                                    fontSize = 11.sp,
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    lineHeight = 14.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "0% (Raw)",
+                                        fontSize = 10.sp,
+                                        color = Color.LightGray,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Slider(
+                                        value = voiceActivationThreshold,
+                                        onValueChange = { viewModel.setVoiceActivationThreshold(it) },
+                                        valueRange = 0f..0.60f,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color(0xFF60A5FA),
+                                            activeTrackColor = Color(0xFF3B82F6),
+                                            inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp)
+                                            .testTag("voice_activation_threshold_slider")
+                                    )
+                                    Text(
+                                        text = "60% (Max Gate)",
+                                        fontSize = 10.sp,
+                                        color = Color.LightGray,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
                             
                             Row(
                                 modifier = Modifier
@@ -1155,7 +1267,7 @@ fun VoiceChatAppScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (isNoiseSuppressionEnabled) "DYNAMIC SOUND PURIFIER ACTIVE" else "RAW SPEECH PASSTHROUGH",
+                                        text = if (isNoiseSuppressionEnabled) "DYNAMIC PURIFIER ACTIVE • ${activeNoiseProfile}" else "RAW SPEECH PASSTHROUGH",
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (isNoiseSuppressionEnabled) Color(0xFF60A5FA) else Color.Gray
@@ -1163,7 +1275,16 @@ fun VoiceChatAppScreen(
                                 }
                                 
                                 Text(
-                                    text = if (isNoiseSuppressionEnabled) "Gate: -48dB • Transient Squelch" else "Telemetry Raw • No Filter",
+                                    text = if (isNoiseSuppressionEnabled) {
+                                        when (activeNoiseProfile) {
+                                            "STANDARD" -> "Gate: -48dB • Standard"
+                                            "FAN" -> "HPF: 320Hz • Hum Eliminator"
+                                            "AC" -> "BPF: 3.3kHz • Hiss Subtractor"
+                                            "WASHING" -> "BPF + Clipper • Slosh Squelch"
+                                            "MIXER" -> "LPF + Slew Limit • Motor Mute"
+                                            else -> "Active"
+                                        }
+                                    } else "Telemetry Raw • No Filter",
                                     fontSize = 9.sp,
                                     color = Color.LightGray,
                                     fontFamily = FontFamily.Monospace
@@ -1757,10 +1878,12 @@ fun VoiceChatAppScreen(
                         }
                     }
                 }
-            }
-        }
-    }
-} else {
+            } // Closes AnimatedVisibility (ROW 3)
+        } // Closes Column 2 inner Column
+    } // Closes Column 2 outer Box
+} // Closes root content Row
+} // Closes if (isLoggedIn) block
+else {
     GuestLoginScreen(viewModel = viewModel, modifier = modifier)
 }
 
