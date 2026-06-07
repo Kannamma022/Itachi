@@ -1,0 +1,1855 @@
+package com.example
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.ChannelEntity
+import com.example.data.ConnectionLogEntity
+import com.example.data.ServerEntity
+import com.example.ui.theme.*
+import com.example.data.AppDatabase
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+    private val viewModel: VoiceViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            MyApplicationTheme {
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    contentWindowInsets = WindowInsets.safeDrawing
+                ) { innerPadding ->
+                    VoiceChatAppScreen(
+                        viewModel = viewModel,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+            }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (viewModel.isPushToTalkEnabled.value) {
+            val keyConfig = viewModel.pttTriggerKey.value
+            val isMatch = if (keyConfig.contains("Volume Down")) {
+                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+            } else {
+                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP
+            }
+            if (isMatch) {
+                viewModel.setPushToTalkActive(true)
+                return true // Consume the volume shift to prevent popups
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (viewModel.isPushToTalkEnabled.value) {
+            val keyConfig = viewModel.pttTriggerKey.value
+            val isMatch = if (keyConfig.contains("Volume Down")) {
+                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+            } else {
+                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP
+            }
+            if (isMatch) {
+                viewModel.setPushToTalkActive(false)
+                return true // Consume the release
+            }
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+}
+
+@Composable
+fun VoiceChatAppScreen(
+    viewModel: VoiceViewModel,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    // Observe State Flows from ViewModel
+    val serverList by viewModel.servers.collectAsStateWithLifecycle()
+    val selectedServer by viewModel.selectedServer.collectAsStateWithLifecycle()
+    val channelList by viewModel.channels.collectAsStateWithLifecycle()
+    val connectedChannel by viewModel.connectedChannel.collectAsStateWithLifecycle()
+    val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
+    val recentLogs by viewModel.connectionLogs.collectAsStateWithLifecycle()
+
+    val isMuted by viewModel.isMuted.collectAsStateWithLifecycle()
+    val isDeafened by viewModel.isDeafened.collectAsStateWithLifecycle()
+    val isLoopbackEnabled by viewModel.isLoopbackEnabled.collectAsStateWithLifecycle()
+    val connectionLatency by viewModel.connectionLatency.collectAsStateWithLifecycle()
+
+    // Audio Diagnostics
+    val microphoneVolume by viewModel.microphoneVolume.collectAsStateWithLifecycle()
+    val activeRate by viewModel.audioEngineSampleRate.collectAsStateWithLifecycle()
+    val codecBitrateState by viewModel.codecBitrate.collectAsStateWithLifecycle()
+    val ecoOptimizationActive by viewModel.isEcoOptimizationActive.collectAsStateWithLifecycle()
+    val isGameBoosterEnabled by viewModel.isGameBoosterEnabled.collectAsStateWithLifecycle()
+    val isNoiseSuppressionEnabled by viewModel.isNoiseSuppressionEnabledByUI.collectAsStateWithLifecycle()
+    val isPushToTalkEnabled by viewModel.isPushToTalkEnabled.collectAsStateWithLifecycle()
+    val isPushToTalkActive by viewModel.isPushToTalkActive.collectAsStateWithLifecycle()
+    val pttTriggerKey by viewModel.pttTriggerKey.collectAsStateWithLifecycle()
+    val performanceModeState by viewModel.performanceMode.collectAsStateWithLifecycle()
+    val nativeBufferInfo by viewModel.nativeBufferInfo.collectAsStateWithLifecycle()
+    val threadProcessUs by viewModel.threadProcessTimeUs.collectAsStateWithLifecycle()
+    val localBatteryInfo by viewModel.localBatteryInfo.collectAsStateWithLifecycle()
+    val activeMembers by viewModel.activeMembers.collectAsStateWithLifecycle()
+
+    // Permission handle
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasNotificationPermission = isGranted
+    }
+
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasMicPermission = isGranted
+        if (isGranted && connectedChannel != null) {
+            // Restart audio if permission granted during active connection
+            viewModel.joinVoiceChannel(connectedChannel!!)
+        }
+    }
+
+    // Modal dialog trigger for creating voice servers
+    var showCreateServerDialog by remember { mutableStateOf(false) }
+
+    Row(modifier = modifier.fillMaxSize()) {
+        
+        // ----------------- COLUMN 1: DISCORD SERVER DRAWER (Left Bar, 64.dp) -----------------
+        Column(
+            modifier = Modifier
+                .width(64.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Branded Application Circle Logo (Sasuke & Itachi Brotherhood logo)
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF2C1E3C))
+                    .clickable {
+                        val funQuotes = listOf(
+                            "Itachi: 'Forgive me Sasuke... Next time.' 🤜🌸",
+                            "Sasuke: 'I'll become stronger than you! ...But pass the ramen first.' 🍜",
+                            "Itachi: 'We are unique brothers. I will always be there for you.' 🦅🔥",
+                            "Sasuke: 'Big brother, let's practice shuriken training together!' 🎯",
+                            "Itachi: 'You still don't have enough bandwidth capacity, little brother... Toggle modern suppressors!' 🎙️"
+                        )
+                        android.widget.Toast.makeText(context, funQuotes.random(), android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.img_brothers_talking_1780777560391),
+                    contentDescription = "Itachi and Sasuke sharing a moment",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Divider(
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.fillMaxWidth(0.6f),
+                thickness = 1.dp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Dynamic list of active Room Servers
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(serverList) { server ->
+                    val isSelected = selectedServer?.id == server.id
+                    
+                    Box(
+                        modifier = Modifier.size(54.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Discord-style dynamic colored capsule indicator on LHS
+                        if (isSelected) {
+                            Box(
+                                modifier = Modifier
+                                    .width(4.dp)
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                                    .align(Alignment.CenterStart)
+                            )
+                        }
+
+                        // Server Avatar Bubble
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(if (isSelected) RoundedCornerShape(14.dp) else CircleShape)
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.secondary
+                                    else Color.White
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    shape = if (isSelected) RoundedCornerShape(14.dp) else CircleShape
+                                )
+                                .clickable {
+                                    viewModel.selectServer(server)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = server.iconChar,
+                                fontSize = 18.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Create New Server action click button
+            IconButton(
+                onClick = { showCreateServerDialog = true },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color.White)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Create Server Button",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            // Minimalist profile status indicator (matching Design HTML)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
+                    .border(2.dp, Color(0xFF23A55A), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "👤",
+                    fontSize = 16.sp
+                )
+            }
+        }
+
+        // Add structural vertical line between sidebar and details (Thin clean Border style)
+        Divider(
+            modifier = Modifier
+                .width(1.dp)
+                .fillMaxHeight(),
+            color = MaterialTheme.colorScheme.outline
+        )
+
+        // ----------------- COLUMN 2: SERVER DETAIL / VOICE CHANNELS AREA (Middle/Right) -----------------
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            
+            // Channel Header Toolbar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = selectedServer?.name ?: "No Server Active",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Row(
+                        modifier = Modifier.padding(top = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (connectionStatus == "Connected") Color(0xFF23A55A) else Color.Gray)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (connectionStatus == "Connected") "LOW LATENCY MODE" else "OFFLINE",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Call Latency Badge
+                if (connectionStatus == "Connected" && connectedChannel != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF23A55A).copy(alpha = 0.15f))
+                            .border(1.dp, Color(0xFF23A55A), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF23A55A))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "${connectionLatency}ms",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF23A55A)
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.Gray.copy(alpha = 0.15f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Offline",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
+
+            // Bottom border line for header toolbar
+            Divider(
+                color = MaterialTheme.colorScheme.outline,
+                thickness = 1.dp,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // High priority Micro-permission advice block
+            if (!hasMicPermission) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "🎙️ Microphone input is restricted",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = "NAW TALKING APP needs audio access to capture raw low-overhead voice packets. (Simulation engine running as backup)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                        ) {
+                            Text("Enable Audio", fontSize = 11.sp, color = Color.White)
+                        }
+                    }
+                }
+            }
+
+            // Main Contents Scaffold: LazyColumn of channels + Diagnostics & persistent configurations
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Beautiful Fun Sasuke and Itachi Thematic Banner Card
+                item {
+                    val quotes = listOf(
+                        "Itachi: 'We are unique brothers. I will always be there for you, even if it's just as an obstacle for you to overcome.' ⚡",
+                        "Sasuke: 'I am a defender of the Leaf, big brother, let's keep our voice latency synchronized!' 🗡️",
+                        "Itachi: 'Forgive me Sasuke... next time I'll join your guild.' 👉🌸",
+                        "Sasuke: 'Toggle the acoustic filters, Itachi. Your mechanical keyboard clicking is too loud!' 🎙️"
+                    )
+                    var activeQuoteIndex by remember { mutableStateOf(0) }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF1E112A) // Mystical deep purple to reflect Sasuke's chakra / Uchiha theme
+                        ),
+                        border = BorderStroke(1.5.dp, Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            // Header Row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "🌸 Uchiha Brotherhood Lounge",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE9D5FF)
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xFFFFB0B0).copy(alpha = 0.15f))
+                                        .border(0.5.dp, Color(0xFFFF8080), RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            activeQuoteIndex = (activeQuoteIndex + 1) % quotes.size
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Next Moment 🤜",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFFF8080)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Large image display
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.Black)
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.img_brothers_talking_1780777560391),
+                                    contentDescription = "Sasuke and Itachi moment",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                                // Shadow Gradient
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
+                                            )
+                                        )
+                                )
+                                // Overlaid funny text bubble
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(10.dp)
+                                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                                        .padding(8.dp)
+                                ) {
+                                    Text(
+                                        text = quotes[activeQuoteIndex],
+                                        fontSize = 11.sp,
+                                        color = Color.White,
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                       // Dynamic list of active Channels grouped in a beautiful Card (Clean Minimalism Design HTML structure)
+                item {
+                    val activeCount = channelList.count { connectedChannel?.id == it.id }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            // Header Row inside Card
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "VOICE CHANNELS",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    letterSpacing = 1.0.sp
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.outlineVariant)
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = if (activeCount > 0) "$activeCount Active" else "No Active Channels",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+
+                            if (channelList.isEmpty()) {
+                                Text(
+                                    text = "No channels configured. Deploy new guilds using the LHS bar.",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    channelList.forEach { channel ->
+                                        val isConnected = connectedChannel?.id == channel.id
+                                        
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(
+                                                    if (isConnected) MaterialTheme.colorScheme.secondary
+                                                    else Color.Transparent
+                                                )
+                                                .clickable {
+                                                    if (isConnected) {
+                                                        viewModel.leaveVoiceChannel()
+                                                    } else {
+                                                        viewModel.joinVoiceChannel(channel)
+                                                    }
+                                                }
+                                                .padding(12.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = if (isConnected) "🔊" else "🔇",
+                                                    fontSize = 16.sp,
+                                                    modifier = Modifier.padding(end = 12.dp)
+                                                )
+                                                
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = channel.name,
+                                                        fontSize = 14.sp,
+                                                        fontWeight = if (isConnected) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (isConnected) MaterialTheme.colorScheme.onSecondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Text(
+                                                        text = "${channel.latencyCategory} Latency | Channel Space",
+                                                        fontSize = 10.sp,
+                                                        color = if (isConnected) MaterialTheme.colorScheme.onSecondary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                    )
+                                                }
+
+                                                // Clean Join status or Disconnect button
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(10.dp))
+                                                        .background(
+                                                            if (isConnected) Color(0xFFB3261E) else MaterialTheme.colorScheme.primary
+                                                        )
+                                                        .clickable {
+                                                            if (isConnected) {
+                                                                viewModel.leaveVoiceChannel()
+                                                            } else {
+                                                                viewModel.joinVoiceChannel(channel)
+                                                            }
+                                                        }
+                                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = if (isConnected) "Leave" else "Join",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color.White
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // Speaking member layout if connected
+                                        if (isConnected) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(start = 24.dp, end = 4.dp, bottom = 8.dp, top = 4.dp),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                activeMembers.forEach { member ->
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(Color.White.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(20.dp)
+                                                                .clip(CircleShape)
+                                                                .background(Color(member.avatarColor))
+                                                                .border(
+                                                                    width = if (member.isSpeaking) 1.5.dp else 0.dp,
+                                                                    color = if (member.isSpeaking) Color(0xFF23A55A) else Color.Transparent,
+                                                                    shape = CircleShape
+                                                                ),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = member.name.take(1),
+                                                                fontSize = 9.sp,
+                                                                color = Color.White,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+
+                                                        Spacer(modifier = Modifier.width(8.dp))
+
+                                                        Text(
+                                                            text = member.name,
+                                                            fontSize = 12.sp,
+                                                            color = if (member.isSpeaking) Color(0xFF23A55A) else MaterialTheme.colorScheme.onSecondary,
+                                                            fontWeight = if (member.isSpeaking) FontWeight.Bold else FontWeight.Normal,
+                                                            modifier = Modifier.weight(1f)
+                                                        )
+
+                                                        Text(
+                                                            text = "${member.deviceStatus} • ${member.latencyMs}ms",
+                                                            fontSize = 9.sp,
+                                                            color = MaterialTheme.colorScheme.onSecondary.copy(alpha = 0.6f)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ----------------- HARDWARE OPTIMIZER MODULE -----------------
+                item {
+                    Text(
+                        text = "HARDWARE OPTIMIZATION CARDS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)
+                    )
+                }
+
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                        ) {
+                            Text(
+                                text = "🔋 Older Hardware Battery Conservation Panel",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Older mobile processors (e.g. Snapdragon 410) choke on heavy 3D rendering and floating canvas visualizers. Adapt settings to lock your power profile:",
+                                fontSize = 11.sp,
+                                color = Color.Gray,
+                                lineHeight = 14.sp
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Interactive Optimization Toggle
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (ecoOptimizationActive) Color(0xFF23A55A).copy(alpha = 0.1f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Activate ECO Processor Mode",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (ecoOptimizationActive) Color(0xFF23A55A) else Color.White
+                                    )
+                                    Text(
+                                        text = "Disables heavy animations and real-time moving canvas graphics.",
+                                        fontSize = 10.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+                                Switch(
+                                    checked = ecoOptimizationActive,
+                                    onCheckedChange = { isChecked ->
+                                        // Auto configure with eco flag toggle
+                                        val targetRate = if (isChecked) 8000 else 16000
+                                        val targetBitrate = if (isChecked) 8 else 16
+                                        viewModel.changeAudioConfiguration(
+                                            rate = targetRate,
+                                            ecoEnabled = isChecked,
+                                            bitrateKbps = targetBitrate
+                                        )
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color(0xFF23A55A)
+                                    )
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Sample Rate grid selector (Extremely helpful for older DSP limits)
+                            Text(
+                                text = "DSP Capture Sample Rate",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Lower sampling rates consume up to 80% less memory bandwidth.",
+                                fontSize = 9.sp,
+                                color = Color.Gray
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val rates = listOf(8000, 16000, 44100, 48000)
+                                val labels = listOf("8kHz\n(ECO)", "16kHz\n(Opus)", "44k\n(Fid)", "48k\n(Pro)")
+                                
+                                rates.zip(labels).forEach { (rateValue, label) ->
+                                    val isSelectedRate = activeRate == rateValue
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(
+                                                if (isSelectedRate) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.surfaceVariant
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (isSelectedRate) Color.White.copy(alpha = 0.5f) else Color.Transparent,
+                                                RoundedCornerShape(6.dp)
+                                            )
+                                            .clickable {
+                                                viewModel.changeAudioConfiguration(
+                                                    rate = rateValue,
+                                                    ecoEnabled = ecoOptimizationActive,
+                                                    bitrateKbps = codecBitrateState
+                                                )
+                                            }
+                                            .padding(vertical = 6.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            fontSize = 11.sp,
+                                            textAlign = TextAlign.Center,
+                                            color = if (isSelectedRate) Color.White else Color.Gray,
+                                            fontWeight = if (isSelectedRate) FontWeight.Bold else FontWeight.Normal,
+                                            lineHeight = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Bitrate Codec Slider
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Simulated Audio Bitrate Coeff",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "${codecBitrateState} kbps (Compact)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                            Slider(
+                                value = codecBitrateState.toFloat(),
+                                onValueChange = {
+                                    val roundedKey = it.toInt().coerceIn(8, 128)
+                                    viewModel.changeAudioConfiguration(
+                                        rate = activeRate,
+                                        ecoEnabled = ecoOptimizationActive,
+                                        bitrateKbps = roundedKey
+                                    )
+                                },
+                                valueRange = 8f..128f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.primary,
+                                    activeTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+                    }
+                }
+
+                // ----------------- ZERO-LAG GAMING OPTIMIZER BOOSTER -----------------
+                item {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isGameBoosterEnabled) {
+                                Color(0xFF143020) // Deep rich green for active gaming booster
+                            } else {
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                            }
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isGameBoosterEnabled) Color(0xFF23A55A).copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "🎮 Zero-Lag Gaming Booster Mode",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isGameBoosterEnabled) Color(0xFF23A55A) else Color.White,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Switch(
+                                    checked = isGameBoosterEnabled,
+                                    onCheckedChange = { viewModel.toggleGameBooster() },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color(0xFF23A55A),
+                                        checkedTrackColor = Color(0xFF143020)
+                                    )
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(6.dp))
+                            
+                            Text(
+                                text = "Optimizes speech processing using THREAD_PRIORITY_URGENT_AUDIO and halves the audio kernel packet buffers. Reduces latency and prevents frame dropouts, dedicating max CPU cycles and extreme scheduling priority to heavy background games like Free Fire, PUBG, Roblox, or Mobile Legends.",
+                                fontSize = 11.sp,
+                                color = if (isGameBoosterEnabled) Color.White.copy(alpha = 0.9f) else Color.Gray,
+                                lineHeight = 14.sp
+                            )
+                            
+                            Spacer(modifier = Modifier.height(10.dp))
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (isGameBoosterEnabled) Color.Black.copy(alpha = 0.3f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isGameBoosterEnabled) Color(0xFF23A55A) else Color.Yellow)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isGameBoosterEnabled) "ACTIVE EXCLUSIVE PRIORITY" else "STANDARD THREAD LAYOUT",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isGameBoosterEnabled) Color(0xFF23A55A) else Color.Gray
+                                    )
+                                }
+                                
+                                Text(
+                                    text = if (isGameBoosterEnabled) "Buffer: 512B Frame • Low Jitter" else "Buffer: 1024B Frame • Normal Jitter",
+                                    fontSize = 9.sp,
+                                    color = Color.LightGray,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ----------------- ACOUSTIC NOISE SUPPRESSOR & CLICK GATE MODULE -----------------
+                item {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth().testTag("noise_suppression_card"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isNoiseSuppressionEnabled) {
+                                Color(0xFF1C2C4C) // Elegant deep sapphire/indigo for audio processing
+                            } else {
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                            }
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isNoiseSuppressionEnabled) Color(0xFF3B82F6).copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "🎙️ Real-Time Noise Suppression & Click Filter",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isNoiseSuppressionEnabled) Color(0xFF60A5FA) else Color.White,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Switch(
+                                    checked = isNoiseSuppressionEnabled,
+                                    onCheckedChange = { viewModel.toggleNoiseSuppression() },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color(0xFF3B82F6),
+                                        checkedTrackColor = Color(0xFF1C2C4C)
+                                    ),
+                                    modifier = Modifier.testTag("noise_suppression_switch")
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(6.dp))
+                            
+                            Text(
+                                text = "Combines native hardware Acoustic Noise Cancellation (ANC) with a digital spectral gate. Real-time sub-millisecond envelope tracking limits keyboard mouse clicks, background machine hums, and AC fan noise so other gamers only hear your voice.",
+                                fontSize = 11.sp,
+                                color = if (isNoiseSuppressionEnabled) Color.White.copy(alpha = 0.9f) else Color.Gray,
+                                lineHeight = 14.sp
+                            )
+                            
+                            Spacer(modifier = Modifier.height(10.dp))
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (isNoiseSuppressionEnabled) Color.Black.copy(alpha = 0.3f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isNoiseSuppressionEnabled) Color(0xFF3B82F6) else Color.Yellow)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isNoiseSuppressionEnabled) "DYNAMIC SOUND PURIFIER ACTIVE" else "RAW SPEECH PASSTHROUGH",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isNoiseSuppressionEnabled) Color(0xFF60A5FA) else Color.Gray
+                                    )
+                                }
+                                
+                                Text(
+                                    text = if (isNoiseSuppressionEnabled) "Gate: -48dB • Transient Squelch" else "Telemetry Raw • No Filter",
+                                    fontSize = 9.sp,
+                                    color = Color.LightGray,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ----------------- PUSH-TO-TALK (PTT) GAME CHATTER MODULE -----------------
+                item {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth().testTag("ptt_card"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isPushToTalkEnabled) {
+                                Color(0xFF2C1E3C) // Elegant deep cosmic violet/purple
+                            } else {
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                            }
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isPushToTalkEnabled) Color(0xFFA855F7).copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "⚡ Real-Time Push-To-Talk (PTT)",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPushToTalkEnabled) Color(0xFFC084FC) else Color.White,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Switch(
+                                    checked = isPushToTalkEnabled,
+                                    onCheckedChange = { viewModel.togglePushToTalk() },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color(0xFFA855F7),
+                                        checkedTrackColor = Color(0xFF2C1E3C)
+                                    ),
+                                    modifier = Modifier.testTag("ptt_switch")
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(6.dp))
+                            
+                            Text(
+                                text = "Conserves mobile data plan bandwidth and cuts background gaming room chatter. The microphone remains completely muted unless you hold the selected hardware trigger key or the on-screen action bar.",
+                                fontSize = 11.sp,
+                                color = if (isPushToTalkEnabled) Color.White.copy(alpha = 0.9f) else Color.Gray,
+                                lineHeight = 14.sp
+                            )
+                            
+                            if (isPushToTalkEnabled) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                
+                                // Hardware key selector
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Hardware Trigger Key:",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.LightGray
+                                    )
+                                    Button(
+                                        onClick = { viewModel.togglePTTTriggerKey() },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF3B2A50)
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp).testTag("ptt_key_toggle_button")
+                                    ) {
+                                        Text(
+                                            text = pttTriggerKey,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE9D5FF)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Interactive hold-to-talk button
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(72.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (isPushToTalkActive) {
+                                                Brush.horizontalGradient(
+                                                    listOf(Color(0xFF8B5CF6), Color(0xFFD946EF))
+                                                )
+                                            } else {
+                                                Brush.horizontalGradient(
+                                                    listOf(Color(0xFF3B2A50), Color(0xFF2E1F3F))
+                                                )
+                                            }
+                                        )
+                                        .testTag("hold_to_talk_button")
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(
+                                                onPress = {
+                                                    viewModel.setPushToTalkActive(true)
+                                                    try {
+                                                        tryAwaitRelease()
+                                                    } finally {
+                                                        viewModel.setPushToTalkActive(false)
+                                                    }
+                                                }
+                                            )
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            text = if (isPushToTalkActive) "🎙️" else "💤",
+                                            fontSize = 20.sp,
+                                            modifier = Modifier
+                                                .scale(if (isPushToTalkActive) 1.2f else 1.0f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (isPushToTalkActive) "MIC TRANSMITTING NOW..." else "HOLD TO TRANSMIT",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isPushToTalkActive) Color.White else Color.Gray,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(10.dp))
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (isPushToTalkEnabled) Color.Black.copy(alpha = 0.3f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isPushToTalkEnabled) {
+                                                if (isPushToTalkActive) Color(0xFFA855F7) else Color.Red
+                                            } else Color.Yellow)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isPushToTalkEnabled) {
+                                            if (isPushToTalkActive) "TRANSMITTING VOICE (Active)" else "MICROPHONE MUTED (Idle)"
+                                        } else "CONTINUOUS BROADCAST ACTIVE",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isPushToTalkEnabled) {
+                                            if (isPushToTalkActive) Color(0xFFC084FC) else Color.Gray
+                                        } else Color.Gray
+                                    )
+                                }
+                                
+                                Text(
+                                    text = if (isPushToTalkEnabled) {
+                                        if (isPushToTalkActive) "Mode: Push To Talk • Active" else "Mode: Push To Talk • Muted"
+                                    } else "Mode: Always On",
+                                    fontSize = 9.sp,
+                                    color = Color.LightGray,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ----------------- HARDWARE REALTIME DIAGNOSTICS & SYSTEM METRICS -----------------
+                item {
+                    Text(
+                        text = "HARDWARE ENGINE TELEMETRY",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                    )
+                }
+
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "🔒 Secure Low-Level Engine Diagnostics",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+
+                            // Parameter outputs
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Telemetry Profile:", fontSize = 11.sp, color = Color.Gray)
+                                Text(
+                                    text = "$performanceModeState Profile",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (performanceModeState == "Ultra Eco") Color(0xFF23A55A) else MaterialTheme.colorScheme.secondary
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Battery Status (Real/HW):", fontSize = 11.sp, color = Color.Gray)
+                                Text(
+                                    text = localBatteryInfo,
+                                    fontSize = 10.sp,
+                                    color = Color.White,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Audio Track Buffer Info:", fontSize = 11.sp, color = Color.Gray)
+                                Text(text = nativeBufferInfo, fontSize = 10.sp, color = Color.White, fontFamily = FontFamily.Monospace)
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Processing Thread Latency:", fontSize = 11.sp, color = Color.Gray)
+                                Text(
+                                    text = if (connectionStatus == "Connected") "${threadProcessUs}μs (Low Bus Load)" else "0μs (Sleeping)",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF23A55A),
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ----------------- CONNECTION AUDITING HISTORY LOGS (Room Persisted) -----------------
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "CONNECTION LOG AUDITS (ROOM PERSISTED)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            letterSpacing = 1.0.sp
+                        )
+                        
+                        Text(
+                            text = "🧹 Clear logs",
+                            fontSize = 11.sp,
+                            color = Color(0xFFF23F43),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable {
+                                coroutineScope.launch { viewModel.clearLogs() }
+                            }
+                        )
+                    }
+                }
+
+                if (recentLogs.isEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f)
+                            )
+                        ) {
+                            Text(
+                                text = "Database log empty. Connect to voice channels to write local audit events.",
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(16.dp),
+                                color = Color.Gray,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    items(recentLogs) { log ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f)
+                            ),
+                            border = BorderStroke(1.dp, Color.Gray.copy(alpha = 0.15f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${log.serverName} • ${log.channelName}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "${log.performanceMode} • ${log.codecBitrateKbps}kbps | ${log.deviceStatus}",
+                                        fontSize = 9.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = "Ping: ${log.latencyMs}ms",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF23A55A),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Loss: ${(log.packetLossPercent * 100).toInt()}%",
+                                        fontSize = 9.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ----------------- ROW 3: DISCORD DOCK / COZY CALL POD (Fixed Bottom Control Bar) -----------------
+            AnimatedVisibility(
+                visible = connectionStatus != "Disconnected" && connectedChannel != null,
+                enter = slideInVertically(animationSpec = spring()) { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                            RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                        ),
+                    colors = CardDefaults.cardColors(
+                        containerColor = SlateDarkest
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp)
+                    ) {
+                        
+                        // Waveform/Audio Level display row (optimized)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Status Dot Indicator
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF23A55A))
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            
+                            Text(
+                                text = "TRANSMITTING INPUT ON ${connectedChannel?.name?.uppercase()}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF23A55A),
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            // Buffer stat or ECO state indicator
+                            Text(
+                                text = if (isGameBoosterEnabled) "GAME BOOST ACTIVE" else if (ecoOptimizationActive) "ECO LEVEL FIXED" else "LIVE TRANSCRIBING",
+                                fontSize = 9.sp,
+                                color = if (isGameBoosterEnabled) Color(0xFF23A55A) else MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        // HIGH PERFORMANCE AMPLITUDE GRAPHIC CANVAS
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SlateMiddle)
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (ecoOptimizationActive || isGameBoosterEnabled) {
+                                // Low-cost ECO Rendering (Absolutely zero dynamic wave computations to save older CPUs)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .scale(if (microphoneVolume > 0.05) 1.5f else 1.0f)
+                                            .clip(CircleShape)
+                                            .background(if (microphoneVolume > 0.05) Color(0xFF23A55A) else Color.Gray)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = if (microphoneVolume > 0.05) "VOICE INTENSITY: ACTIVE SPEAKER" else "VOICE INTENSITY: SILENT",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (microphoneVolume > 0.05) Color.White else Color.Gray
+                                    )
+                                }
+                            } else {
+                                // High-Performance custom Canvas PCM waveform animator
+                                val infiniteTransition = rememberInfiniteTransition()
+                                val waveFactor by infiniteTransition.animateFloat(
+                                    initialValue = 0.8f,
+                                    targetValue = 1.4f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(400, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Reverse
+                                    )
+                                )
+
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val count = 28
+                                    val barWidth = 6.dp.toPx()
+                                    val gap = 4.dp.toPx()
+                                    val centerY = size.height / 2
+                                    
+                                    val startOffset = (size.width - (count * (barWidth + gap))) / 2
+
+                                    for (i in 0 until count) {
+                                        // Standard mathematical sine distribution configured with user speaking level
+                                        val distCenter = 1f - (Math.abs(i - count / 2f) / (count / 2f))
+                                        val barHeightHeight = (microphoneVolume * 80.dp.toPx() * distCenter * waveFactor)
+                                            .coerceAtLeast(3.dp.toPx())
+
+                                        val x = startOffset + i * (barWidth + gap)
+                                        
+                                        drawRoundRect(
+                                            color = if (isMuted) Color.Gray else Color(0xFF23A55A),
+                                            topLeft = androidx.compose.ui.geometry.Offset(x, centerY - barHeightHeight / 2),
+                                            size = androidx.compose.ui.geometry.Size(barWidth, barHeightHeight),
+                                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Controls Panel: Mute, Deafen, Loopback, Disconnect
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            
+                            // Button 1: Mute
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Button(
+                                    onClick = { viewModel.toggleMute() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isMuted) Color(0xFFF23F43) else SlateLighter
+                                    ),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(46.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(
+                                        text = if (isMuted) "🔇" else "🎙️",
+                                        fontSize = 18.sp
+                                    )
+                                }
+                                Text("Mute", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                            }
+
+                            // Button 2: Deafen
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Button(
+                                    onClick = { viewModel.toggleDeafen() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isDeafened) Color(0xFFF23F43) else SlateLighter
+                                    ),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(46.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(
+                                        text = if (isDeafened) "🔇" else "🎧",
+                                        fontSize = 18.sp
+                                    )
+                                }
+                                Text("Deafen", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                            }
+
+                            // Button 3: Local Loopback
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Button(
+                                    onClick = { viewModel.toggleLoopback() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isLoopbackEnabled) Color(0xFF5865F2) else SlateLighter
+                                    ),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(46.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(
+                                        text = "🔊",
+                                        fontSize = 18.sp,
+                                        color = if (isLoopbackEnabled) Color.White else Color.Gray
+                                    )
+                                }
+                                Text("Monitor", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                            }
+
+                            // Button 4: DISCONNECT CALL
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Button(
+                                    onClick = { viewModel.leaveVoiceChannel() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFF23F43)
+                                    ),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(46.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(
+                                        text = "🛑",
+                                        fontSize = 18.sp,
+                                        color = Color.White
+                                    )
+                                }
+                                Text("Hangup", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Modal dialog to implement custom Discord voice server creations locally
+    if (showCreateServerDialog) {
+        var newServerName by remember { mutableStateOf("") }
+        var selectedIconChar by remember { mutableStateOf("🎮") }
+        val icons = listOf("🎮", "💻", "🎵", "⚡", "👾", "🦊", "👑", "🍕", "🔥", "🔮")
+
+        Dialog(onDismissRequest = { showCreateServerDialog = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                shape = RoundedCornerShape(24.dp), // Modern minimalist curved cards
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Create Modern Voice Server",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    TextField(
+                        value = newServerName,
+                        onValueChange = { newServerName = it },
+                        placeholder = { Text("Server Name...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedTextColor = MaterialTheme.colorScheme.onBackground,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onBackground
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text("Pick Glyph Avatar Category Icon", fontSize = 12.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        icons.forEach { icon ->
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (selectedIconChar == icon) MaterialTheme.colorScheme.primary
+                                        else SlateMiddle
+                                    )
+                                    .clickable { selectedIconChar = icon },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(icon, fontSize = 18.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { showCreateServerDialog = false }) {
+                            Text("Cancel", color = Color.Gray)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (newServerName.isNotEmpty()) {
+                                    // Save server dynamically to persistent database!
+                                    coroutineScope.launch {
+                                        val serverDao = AppDatabase.getDatabase(context).serverDao()
+                                        val channelDao = AppDatabase.getDatabase(context).channelDao()
+                                        
+                                        val newServerId = serverDao.insertServer(
+                                            ServerEntity(
+                                                name = newServerName,
+                                                iconChar = selectedIconChar,
+                                                description = "Local voice community."
+                                            )
+                                        )
+                                        
+                                        // Insert default essential lobbies automatically
+                                        channelDao.insertChannels(
+                                            listOf(
+                                                ChannelEntity(
+                                                    serverId = newServerId,
+                                                    name = "General Lounge 🗣️",
+                                                    onlineCount = 1,
+                                                    latencyCategory = "Ultra Low"
+                                                ),
+                                                ChannelEntity(
+                                                    serverId = newServerId,
+                                                    name = "Gaming Lobby 🔫",
+                                                    onlineCount = 0,
+                                                    latencyCategory = "Low"
+                                                )
+                                            )
+                                        )
+                                        showCreateServerDialog = false
+                                        newServerName = ""
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("Create")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

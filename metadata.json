@@ -1,0 +1,6 @@
+{
+  "name": "NAW TALKING APP",
+  "description": "Ultra low-latency, lightweight voice optimizer and channel communicator designed for gamers with zero-lag background processing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
