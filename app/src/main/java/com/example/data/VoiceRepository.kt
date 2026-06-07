@@ -38,7 +38,7 @@ class VoiceRepository(private val database: AppDatabase) {
             channelDao.clearChannels()
 
             // Prepopulate beautiful Anime themed servers
-            val s1 = ServerEntity(name = "Uchiha Sanctuary", iconChar = "🦅", description = "Sasuke & Itachi Brotherhood voice lounge.")
+            val s1 = ServerEntity(name = "Uchiha Sanctuary", iconChar = "🦅", description = "Sasuke & Itachi UCHIHA BROTHERS voice lounge.")
             val s2 = ServerEntity(name = "Konoha Leaf Village", iconChar = "🍥", description = "Naruto Uzumaki Seventh Hokage tactical squad.")
             val s3 = ServerEntity(name = "Akatsuki Fortress", iconChar = "☁️", description = "Shinobi syndicate high-bandwidth operation center.")
             val s4 = ServerEntity(name = "Madara's Infinite Realm", iconChar = "👁️", description = "Low latency dreamworld sound domain.")

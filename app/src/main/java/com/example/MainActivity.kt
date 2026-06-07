@@ -153,7 +153,7 @@ fun VoiceChatAppScreen(
     val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
     val guestUsername by viewModel.guestUsername.collectAsStateWithLifecycle()
 
-    // Permission handle
+    // Permission handle with automatic immediate prompting on app opening
     var hasMicPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -176,34 +176,32 @@ fun VoiceChatAppScreen(
         )
     }
 
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        hasNotificationPermission = isGranted
+    val permissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        hasMicPermission = results[Manifest.permission.RECORD_AUDIO] ?: hasMicPermission
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            hasNotificationPermission = results[Manifest.permission.POST_NOTIFICATIONS] ?: hasNotificationPermission
+        }
+        if (hasMicPermission && connectedChannel != null) {
+            viewModel.joinVoiceChannel(connectedChannel!!)
+        }
     }
 
     LaunchedEffect(Unit) {
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
+        val list = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            arrayOf(Manifest.permission.RECORD_AUDIO)
         }
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        hasMicPermission = isGranted
-        if (isGranted && connectedChannel != null) {
-            // Restart audio if permission granted during active connection
-            viewModel.joinVoiceChannel(connectedChannel!!)
-        }
+        permissionsLauncher.launch(list)
     }
 
     // Modal dialog trigger for creating voice servers
     var showCreateServerDialog by remember { mutableStateOf(false) }
     var showInviteDialog by remember { mutableStateOf(false) }
     var showLogoutConfirmation by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     if (isLoggedIn) {
         Row(modifier = modifier.fillMaxSize()) {
@@ -323,22 +321,50 @@ fun VoiceChatAppScreen(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            // Minimalist profile status indicator (matching Design HTML)
+            val userColorState by viewModel.guestAvatarColor.collectAsStateWithLifecycle()
+            val userEmojiState by viewModel.guestAvatarEmoji.collectAsStateWithLifecycle()
+            val userPicTypeState by viewModel.guestProfilePicType.collectAsStateWithLifecycle()
+
+            val displayEmoji = if (userPicTypeState >= 0) {
+                when (userPicTypeState) {
+                    0 -> "🦊"
+                    1 -> "⚡"
+                    2 -> "👁️"
+                    3 -> "👺"
+                    4 -> "👥"
+                    else -> userEmojiState
+                }
+            } else {
+                userEmojiState
+            }
+
+            val displayColor = if (userPicTypeState >= 0) {
+                when (userPicTypeState) {
+                    0 -> 0xFFF97316
+                    1 -> 0xFF3B82F6
+                    2 -> 0xFFEF4444
+                    3 -> 0xFF9333EA
+                    4 -> 0xFFEC4899
+                    else -> userColorState
+                }
+            } else {
+                userColorState
+            }
+
             Box(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
+                    .background(Color(displayColor))
                     .border(2.dp, Color(0xFF23A55A), CircleShape)
-                    .clickable { showLogoutConfirmation = true }
+                    .clickable { showSettingsDialog = true }
                     .testTag("profile_avatar_button"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = guestUsername.firstOrNull()?.uppercase()?.toString() ?: "👤",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+                    text = displayEmoji,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center
                 )
             }
         }
@@ -534,7 +560,7 @@ fun VoiceChatAppScreen(
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
-                            onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                            onClick = { permissionsLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO)) },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
                         ) {
@@ -797,186 +823,13 @@ fun VoiceChatAppScreen(
                 // ----------------- HARDWARE OPTIMIZER MODULE -----------------
                 item {
                     Text(
-                        text = "HARDWARE OPTIMIZATION CARDS",
+                        text = "HARDWARE OPTIMIZATION STATUS",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                         letterSpacing = 1.0.sp,
                         modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)
                     )
-                }
-
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp)
-                        ) {
-                            Text(
-                                text = "🔋 Older Hardware Battery Conservation Panel",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Older mobile processors (e.g. Snapdragon 410) choke on heavy 3D rendering and floating canvas visualizers. Adapt settings to lock your power profile:",
-                                fontSize = 11.sp,
-                                color = Color.Gray,
-                                lineHeight = 14.sp
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Interactive Optimization Toggle
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (ecoOptimizationActive) Color(0xFF23A55A).copy(alpha = 0.1f)
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                    )
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Activate ECO Processor Mode",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (ecoOptimizationActive) Color(0xFF23A55A) else Color.White
-                                    )
-                                    Text(
-                                        text = "Disables heavy animations and real-time moving canvas graphics.",
-                                        fontSize = 10.sp,
-                                        color = Color.Gray
-                                    )
-                                }
-                                Switch(
-                                    checked = ecoOptimizationActive,
-                                    onCheckedChange = { isChecked ->
-                                        // Auto configure with eco flag toggle
-                                        val targetRate = if (isChecked) 8000 else 16000
-                                        val targetBitrate = if (isChecked) 8 else 16
-                                        viewModel.changeAudioConfiguration(
-                                            rate = targetRate,
-                                            ecoEnabled = isChecked,
-                                            bitrateKbps = targetBitrate
-                                        )
-                                    },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Color(0xFF23A55A)
-                                    )
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Sample Rate grid selector (Extremely helpful for older DSP limits)
-                            Text(
-                                text = "DSP Capture Sample Rate",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Lower sampling rates consume up to 80% less memory bandwidth.",
-                                fontSize = 9.sp,
-                                color = Color.Gray
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                val rates = listOf(8000, 16000, 44100, 48000)
-                                val labels = listOf("8kHz\n(ECO)", "16kHz\n(Opus)", "44k\n(Fid)", "48k\n(Pro)")
-                                
-                                rates.zip(labels).forEach { (rateValue, label) ->
-                                    val isSelectedRate = activeRate == rateValue
-                                    
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(
-                                                if (isSelectedRate) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.surfaceVariant
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (isSelectedRate) Color.White.copy(alpha = 0.5f) else Color.Transparent,
-                                                RoundedCornerShape(6.dp)
-                                            )
-                                            .clickable {
-                                                viewModel.changeAudioConfiguration(
-                                                    rate = rateValue,
-                                                    ecoEnabled = ecoOptimizationActive,
-                                                    bitrateKbps = codecBitrateState
-                                                )
-                                            }
-                                            .padding(vertical = 6.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            fontSize = 11.sp,
-                                            textAlign = TextAlign.Center,
-                                            color = if (isSelectedRate) Color.White else Color.Gray,
-                                            fontWeight = if (isSelectedRate) FontWeight.Bold else FontWeight.Normal,
-                                            lineHeight = 12.sp
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Bitrate Codec Slider
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Simulated Audio Bitrate Coeff",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = "${codecBitrateState} kbps (Compact)",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                            }
-                            Slider(
-                                value = codecBitrateState.toFloat(),
-                                onValueChange = {
-                                    val roundedKey = it.toInt().coerceIn(8, 128)
-                                    viewModel.changeAudioConfiguration(
-                                        rate = activeRate,
-                                        ecoEnabled = ecoOptimizationActive,
-                                        bitrateKbps = roundedKey
-                                    )
-                                },
-                                valueRange = 8f..128f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = MaterialTheme.colorScheme.primary,
-                                    activeTrackColor = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                        }
-                    }
                 }
 
                 // ----------------- ZERO-LAG GAMING OPTIMIZER BOOSTER -----------------
@@ -1064,227 +917,6 @@ fun VoiceChatAppScreen(
                                 
                                 Text(
                                     text = if (isGameBoosterEnabled) "Buffer: 512B Frame • Low Jitter" else "Buffer: 1024B Frame • Normal Jitter",
-                                    fontSize = 9.sp,
-                                    color = Color.LightGray,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // ----------------- ACOUSTIC NOISE SUPPRESSOR & CLICK GATE MODULE -----------------
-                item {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth().testTag("noise_suppression_card"),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isNoiseSuppressionEnabled) {
-                                Color(0xFF1C2C4C) // Elegant deep sapphire/indigo for audio processing
-                            } else {
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                            }
-                        ),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isNoiseSuppressionEnabled) Color(0xFF3B82F6).copy(alpha = 0.6f)
-                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "🎙️ Real-Time Noise Suppression & Click Filter",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isNoiseSuppressionEnabled) Color(0xFF60A5FA) else Color.White,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Switch(
-                                    checked = isNoiseSuppressionEnabled,
-                                    onCheckedChange = { viewModel.toggleNoiseSuppression() },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Color(0xFF3B82F6),
-                                        checkedTrackColor = Color(0xFF1C2C4C)
-                                    ),
-                                    modifier = Modifier.testTag("noise_suppression_switch")
-                                )
-                            }
-                            
-                            Spacer(modifier = Modifier.height(6.dp))
-                            
-                            Text(
-                                text = "Combines native hardware Acoustic Noise Cancellation (ANC) with a digital spectral biquad cascade state-variable gate. Real-time sub-millisecond envelope tracking limits keyboard mouse clicks, background machine hums, and AC fan noise so other gamers only hear your voice.",
-                                fontSize = 11.sp,
-                                color = if (isNoiseSuppressionEnabled) Color.White.copy(alpha = 0.9f) else Color.Gray,
-                                lineHeight = 14.sp
-                            )
-                            
-                            if (isNoiseSuppressionEnabled) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "SELECT APPLIANCE DSP PROFILE:",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF60A5FA),
-                                    letterSpacing = 1.sp
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                
-                                val profilesList = listOf(
-                                    Pair("STANDARD", "🎙️ Standard"),
-                                    Pair("FAN", "💨 Fan Hum"),
-                                    Pair("AC", "❄️ AC Hiss"),
-                                    Pair("WASHING", "🧼 Washer"),
-                                    Pair("MIXER", "🌪️ Mixer/Jar")
-                                )
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    profilesList.forEach { (profileKey, label) ->
-                                        val isSelected = activeNoiseProfile == profileKey
-                                        val containerCol = if (isSelected) Color(0xFF3B82F6) else Color.Black.copy(alpha = 0.3f)
-                                        val textCol = if (isSelected) Color.White else Color.LightGray
-                                        val borderCol = if (isSelected) Color(0xFF60A5FA) else Color.Gray.copy(alpha = 0.3f)
-
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(containerCol)
-                                                .border(1.dp, borderCol, RoundedCornerShape(10.dp))
-                                                .clickable { viewModel.setNoiseProfile(profileKey) }
-                                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                                .testTag("noise_profile_chip_$profileKey"),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = label,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = textCol
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-                                val explanationText = when (activeNoiseProfile) {
-                                    "STANDARD" -> "Standard noise gate & keyboard transient squelch limits background mouse click and low chatter."
-                                    "FAN" -> "High-pass filter at 320Hz + live envelope hum tracking completely isolates ceiling fan/AC motor drones."
-                                    "AC" -> "Strict telecom band-limit (300Hz-3.3kHz) + continuous spectral subtraction. Perfect for rushing wind AC hiss."
-                                    "WASHING" -> "Vocal structure isolation + crest limit transient soft clips heavy washing machine spinning sloshes & metallic clangs."
-                                    "MIXER" -> "Aggressive 1.2kHz lowpass filter + slew-rate differentiation limits. Drowns ear-splitting blenders/grinders."
-                                    else -> ""
-                                }
-                                if (explanationText.isNotEmpty()) {
-                                    Text(
-                                        text = explanationText,
-                                        fontSize = 11.sp,
-                                        color = Color.LightGray.copy(alpha = 0.8f),
-                                        lineHeight = 14.sp,
-                                        modifier = Modifier.padding(horizontal = 2.dp)
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(14.dp))
-                                Text(
-                                    text = "🎛️ VOICE ACTIVATION SENSITIVITY:",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF60A5FA),
-                                    letterSpacing = 1.sp
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Set the threshold envelope target. Signals quieter than this will be gated out entirely. Current: ${(voiceActivationThreshold * 100).toInt()}%",
-                                    fontSize = 11.sp,
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    lineHeight = 14.sp
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = "0% (Raw)",
-                                        fontSize = 10.sp,
-                                        color = Color.LightGray,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Slider(
-                                        value = voiceActivationThreshold,
-                                        onValueChange = { viewModel.setVoiceActivationThreshold(it) },
-                                        valueRange = 0f..0.60f,
-                                        colors = SliderDefaults.colors(
-                                            thumbColor = Color(0xFF60A5FA),
-                                            activeTrackColor = Color(0xFF3B82F6),
-                                            inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
-                                        ),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(horizontal = 8.dp)
-                                            .testTag("voice_activation_threshold_slider")
-                                    )
-                                    Text(
-                                        text = "60% (Max Gate)",
-                                        fontSize = 10.sp,
-                                        color = Color.LightGray,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        if (isNoiseSuppressionEnabled) Color.Black.copy(alpha = 0.3f)
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                        RoundedCornerShape(6.dp)
-                                    )
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(if (isNoiseSuppressionEnabled) Color(0xFF3B82F6) else Color.Yellow)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isNoiseSuppressionEnabled) "DYNAMIC PURIFIER ACTIVE • ${activeNoiseProfile}" else "RAW SPEECH PASSTHROUGH",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isNoiseSuppressionEnabled) Color(0xFF60A5FA) else Color.Gray
-                                    )
-                                }
-                                
-                                Text(
-                                    text = if (isNoiseSuppressionEnabled) {
-                                        when (activeNoiseProfile) {
-                                            "STANDARD" -> "Gate: -48dB • Standard"
-                                            "FAN" -> "HPF: 320Hz • Hum Eliminator"
-                                            "AC" -> "BPF: 3.3kHz • Hiss Subtractor"
-                                            "WASHING" -> "BPF + Clipper • Slosh Squelch"
-                                            "MIXER" -> "LPF + Slew Limit • Motor Mute"
-                                            else -> "Active"
-                                        }
-                                    } else "Telemetry Raw • No Filter",
                                     fontSize = 9.sp,
                                     color = Color.LightGray,
                                     fontFamily = FontFamily.Monospace
@@ -2215,6 +1847,421 @@ else {
                 }
             },
             modifier = Modifier.testTag("logout_confirmation_dialog")
+        )
+    }
+
+    // Application Settings Dialog
+    if (showSettingsDialog) {
+        val userColorState by viewModel.guestAvatarColor.collectAsStateWithLifecycle()
+        val userEmojiState by viewModel.guestAvatarEmoji.collectAsStateWithLifecycle()
+        val userPicTypeState by viewModel.guestProfilePicType.collectAsStateWithLifecycle()
+        val isNoiseSuppressionEnabled by viewModel.isNoiseSuppressionEnabledByUI.collectAsStateWithLifecycle()
+        val activeNoiseProfile by viewModel.activeNoiseProfile.collectAsStateWithLifecycle()
+        val voiceActivationThreshold by viewModel.voiceActivationThreshold.collectAsStateWithLifecycle()
+
+        val micVolMultiplier by viewModel.micVolumeMultiplier.collectAsStateWithLifecycle()
+        val playVolMultiplier by viewModel.playbackVolumeMultiplier.collectAsStateWithLifecycle()
+        val isEchoEnabled by viewModel.isLocalEchoEnabled.collectAsStateWithLifecycle()
+        val activeVoiceEffect by viewModel.activeVoiceEffect.collectAsStateWithLifecycle()
+
+        var tempUsername by remember { mutableStateOf(guestUsername) }
+        var tempPicType by remember { mutableStateOf(userPicTypeState) }
+        var tempColor by remember { mutableStateOf(userColorState) }
+        var tempEmoji by remember { mutableStateOf(userEmojiState) }
+
+        // Sync local edit states when opened
+        LaunchedEffect(showSettingsDialog) {
+            tempUsername = guestUsername
+            tempPicType = userPicTypeState
+            tempColor = userColorState
+            tempEmoji = userEmojiState
+        }
+
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("⚙️ Application Settings", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    IconButton(
+                        onClick = { showSettingsDialog = false }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close Settings",
+                            tint = Color.White
+                        )
+                    }
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // --- SECTION 1: PROFILE MANAGEMENT ---
+                    Text(
+                        text = "USER PROFILE",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 1.sp
+                    )
+
+                    OutlinedTextField(
+                        value = tempUsername,
+                        onValueChange = { tempUsername = it },
+                        label = { Text("Display Username") },
+                        modifier = Modifier.fillMaxWidth().testTag("settings_username_input"),
+                        singleLine = true
+                    )
+
+                    // Profile Pic Preset selectors (Naruto characters)
+                    Text(
+                        text = "Select Preset Anime Profile Picture:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+
+                    val presets = listOf(
+                        Triple(0, "🦊 Naruto", 0xFFF97316),
+                        Triple(1, "⚡ Sasuke", 0xFF3B82F6),
+                        Triple(2, "👁️ Itachi", 0xFFEF4444),
+                        Triple(3, "👺 Madara", 0xFF9333EA),
+                        Triple(4, "👥 UCHIHA BROTHERS", 0xFFEC4899),
+                        Triple(-1, "🎨 Custom", tempColor)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        presets.forEach { (typeVal, label, colorVal) ->
+                            val isSelected = tempPicType == typeVal
+                            val borderCol = if (isSelected) Color(colorVal) else Color.Transparent
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) Color(colorVal).copy(alpha = 0.3f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .border(2.dp, borderCol, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        tempPicType = typeVal
+                                        if (typeVal >= 0) {
+                                            tempColor = colorVal
+                                            tempEmoji = when (typeVal) {
+                                                0 -> "🦊"
+                                                1 -> "⚡"
+                                                2 -> "👁️"
+                                                3 -> "👺"
+                                                4 -> "👥"
+                                                else -> "👤"
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) Color.White else Color.Gray
+                                )
+                            }
+                        }
+                    }
+
+                    if (tempPicType == -1) {
+                        // Custom avatar controls
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = tempEmoji,
+                                onValueChange = { tempEmoji = it.take(2) },
+                                label = { Text("Emoji Avatar") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+
+                            // Quick custom color choices
+                            val colorsList = listOf(0xFFE91E63, 0xFF9C27B0, 0xFF673AB7, 0xFF3F51B5, 0xFF009688, 0xFF4CAF50, 0xFFFFC107)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Custom Color", fontSize = 10.sp, color = Color.Gray)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    colorsList.forEach { col ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(24.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(col))
+                                                .border(
+                                                    2.dp,
+                                                    if (tempColor == col) Color.White else Color.Transparent,
+                                                    CircleShape
+                                                )
+                                                .clickable { tempColor = col }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Divider(color = Color.Gray.copy(alpha = 0.3f))
+
+                    // --- SECTION 2: NOISE CANCELLATION ---
+                    Text(
+                        text = "NOISE CANCELLATION",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 1.sp
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Acoustic Noise Suppressor", fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Continuously filters background noise.", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = isNoiseSuppressionEnabled,
+                            onCheckedChange = { viewModel.toggleNoiseSuppression() }
+                        )
+                    }
+
+                    if (isNoiseSuppressionEnabled) {
+                        Text("Appliance Hum Filtering Preset:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        val noiseList = listOf(
+                            Pair("STANDARD", "🎙️ Standard Gate"),
+                            Pair("FAN", "💨 Fan Hum"),
+                            Pair("AC", "❄️ AC Hiss"),
+                            Pair("WASHING", "🧼 Washer"),
+                            Pair("MIXER", "🌪️ Mixer")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            noiseList.forEach { (profileKey, label) ->
+                                val isSelected = activeNoiseProfile == profileKey
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                        .clickable { viewModel.setNoiseProfile(profileKey) }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text(label, fontSize = 11.sp, color = if (isSelected) Color.White else Color.LightGray)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Gating sensitivity: ${(voiceActivationThreshold * 100).toInt()}%",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                        Slider(
+                            value = voiceActivationThreshold,
+                            onValueChange = { viewModel.setVoiceActivationThreshold(it) },
+                            valueRange = 0f..0.60f
+                        )
+                    }
+
+                    Divider(color = Color.Gray.copy(alpha = 0.3f))
+
+                    // --- SECTION 3: AUDIO CONTROLS ---
+                    Text(
+                        text = "AUDIO CONTROLS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 1.sp
+                    )
+
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Microphone Out Gain Coeff", fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text("${(micVolMultiplier * 100).toInt()}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                        }
+                        Slider(
+                            value = micVolMultiplier,
+                            onValueChange = { viewModel.setMicVolumeMultiplier(it) },
+                            valueRange = 0.5f..3.0f
+                        )
+                    }
+
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Incoming Playback Master Volume", fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text("${(playVolMultiplier * 100).toInt()}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                        }
+                        Slider(
+                            value = playVolMultiplier,
+                            onValueChange = { viewModel.setPlaybackVolumeMultiplier(it) },
+                            valueRange = 0.0f..2.0f
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Enable Local Loopback Echo", fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Feed microphone back into speakers.", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = isEchoEnabled,
+                            onCheckedChange = { viewModel.toggleLocalEcho() }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Divider(color = Color.Gray.copy(alpha = 0.3f))
+
+                    // --- SECTION 4: SHINOBI VOICE MODULATION ---
+                    Text(
+                        text = "SHINOBI VOICE MODULATION",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 1.sp
+                    )
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Choose your character-themed real-time DSP voice filter for an immersive, lore-faithful gaming experience. Pair this with the loopback echo setting above to hear your transformed voice.",
+                            fontSize = 11.sp,
+                            color = Color.LightGray.copy(alpha = 0.8f),
+                            lineHeight = 15.sp
+                        )
+
+                        val voiceEffects = listOf(
+                            Triple("NONE", "Raw Mic 🎙️", "No transformation applied, regular clean sound."),
+                            Triple("NARUTO", "Naruto Uzumaki 🦊", "Vibrant, high-energy raspy shadow frequency pitch boost."),
+                            Triple("OBITO", "Obito & Kamui DSP 👺", "Deep, slow, hollow spatial distortion with Kamui echo."),
+                            Triple("ITACHI", "Itachi Tsukuyomi 🦅👀", "Calm, slow majestic pitch reduction with Tsukuyomi echo.")
+                        )
+
+                        voiceEffects.forEach { (key, title, desc) ->
+                            val isSelected = activeVoiceEffect == key
+                            val containerCol = if (isSelected) {
+                                when(key) {
+                                    "NARUTO" -> Color(0xFF1E1712) // dark orange tint
+                                    "OBITO" -> Color(0xFF1C132E) // dark purple tint
+                                    "ITACHI" -> Color(0xFF1D1111) // dark red tint
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                }
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            }
+                            val borderCol = if (isSelected) {
+                                when(key) {
+                                    "NARUTO" -> Color(0xFFF97316)
+                                    "OBITO" -> Color(0xFF9333EA)
+                                    "ITACHI" -> Color(0xFFEF4444)
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+                            } else {
+                                Color.Transparent
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(containerCol)
+                                    .border(1.5.dp, borderCol, RoundedCornerShape(10.dp))
+                                    .clickable { viewModel.setVoiceEffect(key) }
+                                    .padding(12.dp)
+                                    .testTag("voice_effect_row_$key"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = title,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = if (isSelected) Color.White else Color.LightGray
+                                        )
+                                        if (isSelected) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(6.dp)
+                                                    .clip(CircleShape)
+                                                    .background(borderCol)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = desc,
+                                        fontSize = 11.sp,
+                                        color = if (isSelected) Color.White.copy(alpha = 0.8f) else Color.Gray,
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                                
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { viewModel.setVoiceEffect(key) },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = borderCol,
+                                        unselectedColor = Color.Gray.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier.testTag("voice_effect_radio_$key").size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.updateProfile(tempUsername, tempPicType, tempColor, tempEmoji)
+                        showSettingsDialog = false
+                    },
+                    modifier = Modifier.testTag("apply_settings_button")
+                ) {
+                    Text("Apply & Save Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showSettingsDialog = false }
+                ) {
+                    Text("Close")
+                }
+            },
+            modifier = Modifier.testTag("settings_modal_dialog")
         )
     }
 }

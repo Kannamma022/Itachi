@@ -85,7 +85,7 @@ fun GuestLoginScreen(
             // Text headings
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "UCHIHA BROTHERHOOD",
+                    text = "UCHIHA BROTHERS",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = MinimalTextDarkest,

@@ -122,6 +122,39 @@ data class AnimeCharacter(
                 soundFrequencyStart = 600.0,
                 soundFrequencyEnd = 1800.0,
                 tag = "Moon Guardian"
+            ),
+            AnimeCharacter(
+                name = "Sasuke Uchiha",
+                series = "Naruto Shippuden",
+                emoji = "⚡👁️",
+                auraColor = 0xFF5B3BF6,
+                auraName = "Eternal Mangekyou Sharingan & Indra Susanoo",
+                quote = "I have already closed my eyes... My goal only lies in the darkness.",
+                soundFrequencyStart = 300.0,
+                soundFrequencyEnd = 1300.0,
+                tag = "Shadow Hokage"
+            ),
+            AnimeCharacter(
+                name = "Itachi Uchiha",
+                series = "Naruto Shippuden",
+                emoji = "👁️🐦",
+                auraColor = 0xFFEF4444,
+                auraName = "Mangekyou Tsukuyomi Amaterasu",
+                quote = "Even the strongest of opponents always has a weakness... 👁️",
+                soundFrequencyStart = 250.0,
+                soundFrequencyEnd = 1050.0,
+                tag = "Rogue Ninja Prodigy"
+            ),
+            AnimeCharacter(
+                name = "Madara Uchiha",
+                series = "Naruto Shippuden",
+                emoji = "👺☄️",
+                auraColor = 0xFF9333EA,
+                auraName = "Perfect Majestic Susanoo Clad Ten-Tails",
+                quote = "Wake up to reality! Nothing ever goes as planned in this accursed world.",
+                soundFrequencyStart = 160.0,
+                soundFrequencyEnd = 950.0,
+                tag = "Legendary Uchiha Ancestor"
             )
         )
     }

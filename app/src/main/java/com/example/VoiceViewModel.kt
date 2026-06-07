@@ -54,6 +54,56 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     val guestUsername = MutableStateFlow(sharedPrefs.getString("guest_username", "") ?: "")
     val guestPassword = MutableStateFlow(sharedPrefs.getString("guest_password", "") ?: "")
 
+    // Profile Settings States
+    val guestAvatarColor = MutableStateFlow(sharedPrefs.getLong("guest_avatar_color", 0xFF8B5CF6))
+    val guestAvatarEmoji = MutableStateFlow(sharedPrefs.getString("guest_avatar_emoji", "🦊") ?: "🦊")
+    val guestProfilePicType = MutableStateFlow(sharedPrefs.getInt("guest_profile_pic_type", 0)) // 0: Naruto, 1: Sasuke, 2: Itachi, 3: Madara, 4: Uchiha Brothers, -1: Custom Color/Emoji
+
+    // Audio Control Parameters
+    val micVolumeMultiplier = MutableStateFlow(sharedPrefs.getFloat("mic_volume_multiplier", 1.0f))
+    val playbackVolumeMultiplier = MutableStateFlow(sharedPrefs.getFloat("playback_volume_multiplier", 1.0f))
+    val isLocalEchoEnabled = MutableStateFlow(sharedPrefs.getBoolean("local_echo_enabled", false))
+    val activeVoiceEffect = audioEngine.activeVoiceEffect
+
+    fun setVoiceEffect(effect: String) {
+        sharedPrefs.edit().putString("active_voice_effect", effect).apply()
+        audioEngine.setVoiceEffect(effect)
+    }
+
+    fun setMicVolumeMultiplier(value: Float) {
+        sharedPrefs.edit().putFloat("mic_volume_multiplier", value).apply()
+        micVolumeMultiplier.value = value
+    }
+
+    fun setPlaybackVolumeMultiplier(value: Float) {
+        sharedPrefs.edit().putFloat("playback_volume_multiplier", value).apply()
+        playbackVolumeMultiplier.value = value
+    }
+
+    fun toggleLocalEcho() {
+        val next = !isLocalEchoEnabled.value
+        sharedPrefs.edit().putBoolean("local_echo_enabled", next).apply()
+        isLocalEchoEnabled.value = next
+    }
+
+    fun updateProfile(newName: String, newPicType: Int, newColor: Long, newEmoji: String) {
+        sharedPrefs.edit()
+            .putString("guest_username", newName)
+            .putInt("guest_profile_pic_type", newPicType)
+            .putLong("guest_avatar_color", newColor)
+            .putString("guest_avatar_emoji", newEmoji)
+            .apply()
+        guestUsername.value = newName
+        guestProfilePicType.value = newPicType
+        guestAvatarColor.value = newColor
+        guestAvatarEmoji.value = newEmoji
+
+        // Refresh active members display name
+        _connectedChannel.value?.let { channel ->
+            spawnMockMembers(channel)
+        }
+    }
+
     fun loginGuest(user: String, pass: String) {
         sharedPrefs.edit()
             .putBoolean("is_logged_in", true)
@@ -155,6 +205,11 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         instance = this
+        
+        // Persistent voice effect loading
+        val persistedEffect = sharedPrefs.getString("active_voice_effect", "NONE") ?: "NONE"
+        audioEngine.setVoiceEffect(persistedEffect)
+
         // Prepopulate db and set default server on first run
         viewModelScope.launch {
             repository.checkAndPrepopulate()
@@ -432,6 +487,32 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         val currentGuest = guestUsername.value.ifBlank { "Riley" }
         val activeSkin = activeAnimeSkin.value
 
+        val userEmoji = if (guestProfilePicType.value >= 0) {
+            when (guestProfilePicType.value) {
+                0 -> "🦊"
+                1 -> "⚡"
+                2 -> "👁️"
+                3 -> "👺"
+                4 -> "👥"
+                else -> guestAvatarEmoji.value
+            }
+        } else {
+            guestAvatarEmoji.value
+        }
+
+        val userColor = if (guestProfilePicType.value >= 0) {
+            when (guestProfilePicType.value) {
+                0 -> 0xFFF97316 // Naruto Orange
+                1 -> 0xFF3B82F6 // Sasuke Blue
+                2 -> 0xFFEF4444 // Itachi Red
+                3 -> 0xFF9333EA // Madara Purple
+                4 -> 0xFFEC4899 // Brothers Pink
+                else -> guestAvatarColor.value
+            }
+        } else {
+            guestAvatarColor.value
+        }
+
         val candidates = if (isAnimeModeEnabled.value) {
             listOf(
                 ChannelMember("Satoru Gojo 🤞🌌", 0xFF8B5CF6, false, "Limitless Void", 3),
@@ -443,8 +524,8 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                 ChannelMember("Roronoa Zoro ⚔️🟢", 0xFF10B981, false, "Three-Sword", 21),
                 ChannelMember("Sailor Moon 🌙🎀", 0xFFFF69B4, false, "Moon Guardian", 28),
                 ChannelMember(
-                    if (activeSkin != null) "${activeSkin.emoji} ${activeSkin.name} (You)" else "$currentGuest (You)",
-                    activeSkin?.auraColor ?: 0xFF2196F3,
+                    if (activeSkin != null) "${activeSkin.emoji} ${activeSkin.name} (You)" else "$userEmoji $currentGuest (You)",
+                    activeSkin?.auraColor ?: userColor,
                     false,
                     activeSkin?.auraName ?: "My Device",
                     12
@@ -455,7 +536,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                 ChannelMember("Alex 🎮", 0xFFAF52BE, false, "Performance", 12),
                 ChannelMember("Taylor 🦊", 0xFFE91E63, false, "Eco Core", 28),
                 ChannelMember("Jordan 🎧", 0xFF009688, false, "Legacy", 45),
-                ChannelMember("$currentGuest (You)", 0xFF2196F3, false, "My Device", 10)
+                ChannelMember("$userEmoji $currentGuest (You)", userColor, false, "My Device", 10)
             )
         }
 
@@ -607,6 +688,11 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                 )
             
             notificationManager.notify(NOTIFICATION_ID, builder.build())
+            try {
+                BackgroundVoiceService.startService(context)
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
             updateTileState()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -618,6 +704,11 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(NOTIFICATION_ID)
+            try {
+                BackgroundVoiceService.stopService(context)
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
             updateTileState()
         } catch (e: Exception) {
             e.printStackTrace()

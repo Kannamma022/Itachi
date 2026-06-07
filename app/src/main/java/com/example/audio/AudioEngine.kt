@@ -57,6 +57,25 @@ class AudioEngine(private val context: Context) {
     private val _voiceActivationThreshold = MutableStateFlow(0.12f) // default sensitivity setting
     val voiceActivationThreshold: StateFlow<Float> = _voiceActivationThreshold
 
+    private var currentVoiceEffect = "NONE" // "NONE", "NARUTO", "OBITO", "ITACHI"
+
+    private val _activeVoiceEffect = MutableStateFlow("NONE")
+    val activeVoiceEffect: StateFlow<String> = _activeVoiceEffect
+
+    fun setVoiceEffect(effect: String) {
+        if (this.currentVoiceEffect != effect) {
+            this.currentVoiceEffect = effect
+            _activeVoiceEffect.value = effect
+            Log.d(TAG, "Voice effect changed to: $effect")
+        }
+    }
+
+    // Voice modulation DSP state variables
+    private var obitoDelayIndex = 0
+    private val obitoDelayBuffer = ShortArray(120) { 0.toShort() }
+    private var itachiDelayPtr = 0
+    private var itachiDelayBuffer: FloatArray? = null
+
     /**
      * Updates the sensitivity threshold for voice activation gating (0.0f - 1.0f range).
      */
@@ -325,6 +344,119 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
+     * Real-time character themed voice modulation effect.
+     * Alters raw PCM 16-bit ShortArray in-place.
+     */
+    private fun processVoiceModulation(buffer: ShortArray, size: Int) {
+        if (currentVoiceEffect == "NONE") return
+
+        when (currentVoiceEffect) {
+            "NARUTO" -> {
+                // Naruto: High-energy resampled pitch shift UP + volume gain
+                val temp = ShortArray(size) { 0.toShort() }
+                val pitchFactor = 1.25f // pitch shift up
+                var outIdx = 0
+                var inIdx = 0f
+                while (outIdx < size) {
+                    val idx1 = inIdx.toInt()
+                    val idx2 = (idx1 + 1).coerceAtMost(size - 1)
+                    val frac = inIdx - idx1
+                    val sample = if (idx1 < size) {
+                        val s1 = buffer[idx1].toFloat()
+                        val s2 = buffer[idx2].toFloat()
+                        s1 + frac * (s2 - s1)
+                    } else 0f
+                    val excited = (sample * 1.3f).coerceIn(-32768f, 32767f)
+                    temp[outIdx] = excited.toInt().toShort()
+                    
+                    outIdx++
+                    inIdx += pitchFactor
+                    if (inIdx >= size) {
+                        inIdx = 0f
+                    }
+                }
+                temp.copyInto(buffer, 0, 0, size)
+            }
+            "OBITO" -> {
+                // Obito: Heavy pitch shift DOWN (deep menacing voice) + hollow digital echo resonance
+                val temp = ShortArray(size) { 0.toShort() }
+                val pitchFactor = 0.65f // deep voice pitch shift down
+                var outIdx = 0
+                var inIdx = 0f
+                
+                while (outIdx < size) {
+                    val idx1 = inIdx.toInt()
+                    val idx2 = (idx1 + 1).coerceAtMost(size - 1)
+                    val frac = inIdx - idx1
+                    var sample = if (idx1 < size) {
+                        val s1 = buffer[idx1].toFloat()
+                        val s2 = buffer[idx2].toFloat()
+                        s1 + frac * (s2 - s1)
+                    } else 0f
+                    
+                    sample = (sample * 1.5f).coerceIn(-32768f, 32767f)
+                    temp[outIdx] = sample.toInt().toShort()
+                    outIdx++
+                    inIdx += pitchFactor
+                }
+                
+                // Add metallic background reverb
+                for (i in 0 until size) {
+                    val original = temp[i].toInt()
+                    val delayedSample = obitoDelayBuffer[obitoDelayIndex].toInt()
+                    obitoDelayBuffer[obitoDelayIndex] = (original * 0.45f + delayedSample * 0.35f).toInt().toShort()
+                    obitoDelayIndex = (obitoDelayIndex + 1) % obitoDelayBuffer.size
+                    
+                    buffer[i] = (original * 0.7f + delayedSample * 0.5f).coerceIn(-32768f, 32767f).toInt().toShort()
+                }
+            }
+            "ITACHI" -> {
+                // Itachi: Calm pitch shift DOWN + slow multi-tap echo (Tsukuyomi illusion)
+                if (itachiDelayBuffer == null) {
+                    itachiDelayBuffer = FloatArray((sampleRate * 0.18).toInt()) { 0f }
+                }
+                val delayBufferSize = itachiDelayBuffer!!.size
+                val itachiDelay = itachiDelayBuffer!!
+                
+                val temp = ShortArray(size) { 0.toShort() }
+                val pitchFactor = 0.88f // slight pitch reduction
+                var outIdx = 0
+                var inIdx = 0f
+                while (outIdx < size) {
+                    val idx1 = inIdx.toInt()
+                    val idx2 = (idx1 + 1).coerceAtMost(size - 1)
+                    val frac = inIdx - idx1
+                    val sample = if (idx1 < size) {
+                        val s1 = buffer[idx1].toFloat()
+                        val s2 = buffer[idx2].toFloat()
+                        s1 + frac * (s2 - s1)
+                    } else 0f
+                    
+                    temp[outIdx] = sample.toInt().toShort()
+                    outIdx++
+                    inIdx += pitchFactor
+                }
+                
+                for (i in 0 until size) {
+                    val inputSample = temp[i].toFloat()
+                    
+                    val tap1 = itachiDelay[(itachiDelayPtr - 1000 + delayBufferSize) % delayBufferSize]
+                    val tap2 = itachiDelay[(itachiDelayPtr - 2500 + delayBufferSize) % delayBufferSize]
+                    val tap3 = itachiDelay[(itachiDelayPtr - delayBufferSize + 1) % delayBufferSize]
+                    
+                    val echoMix = tap1 * 0.3f + tap2 * 0.2f + tap3 * 0.15f
+                    
+                    itachiDelay[itachiDelayPtr] = inputSample + echoMix * 0.4f
+                    itachiDelayPtr = (itachiDelayPtr + 1) % delayBufferSize
+                    
+                    val outVal = inputSample * 0.75f + echoMix * 0.55f
+                    buffer[i] = outVal.coerceIn(-32768f, 32767f).toInt().toShort()
+                }
+            }
+        }
+    }
+
+    /**
      * Chamberlin State-Variable-Filter (SVF) Cascade.
      * High-performance, fast, sample-rate independent dual-stage filter.
      */
@@ -488,6 +620,9 @@ class AudioEngine(private val context: Context) {
                     if (readResult > 0) {
                         // Apply Noise suppression node (Hardware + Software Gate / Click Killer)
                         processNoiseSuppression(audioBuffer, readResult)
+
+                        // Apply Voice modulation (Naruto, Obito, Itachi effect presets)
+                        processVoiceModulation(audioBuffer, readResult)
 
                         // Calculate Real amplitude
                         var sum = 0.0
