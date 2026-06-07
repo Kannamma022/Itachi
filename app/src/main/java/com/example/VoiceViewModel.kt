@@ -63,6 +63,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     val micVolumeMultiplier = MutableStateFlow(sharedPrefs.getFloat("mic_volume_multiplier", 1.0f))
     val playbackVolumeMultiplier = MutableStateFlow(sharedPrefs.getFloat("playback_volume_multiplier", 1.0f))
     val isLocalEchoEnabled = MutableStateFlow(sharedPrefs.getBoolean("local_echo_enabled", false))
+    val isAgcEnabled = MutableStateFlow(sharedPrefs.getBoolean("agc_enabled", true))
     val activeVoiceEffect = audioEngine.activeVoiceEffect
 
     fun setVoiceEffect(effect: String) {
@@ -84,6 +85,14 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         val next = !isLocalEchoEnabled.value
         sharedPrefs.edit().putBoolean("local_echo_enabled", next).apply()
         isLocalEchoEnabled.value = next
+        audioEngine.setLoopback(next)
+    }
+
+    fun toggleAgc() {
+        val next = !isAgcEnabled.value
+        sharedPrefs.edit().putBoolean("agc_enabled", next).apply()
+        isAgcEnabled.value = next
+        audioEngine.setAgcEnabled(next)
     }
 
     fun updateProfile(newName: String, newPicType: Int, newColor: Long, newEmoji: String) {
@@ -209,6 +218,10 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         // Persistent voice effect loading
         val persistedEffect = sharedPrefs.getString("active_voice_effect", "NONE") ?: "NONE"
         audioEngine.setVoiceEffect(persistedEffect)
+
+        // Persistent AGC and loopback loading
+        audioEngine.setAgcEnabled(sharedPrefs.getBoolean("agc_enabled", true))
+        audioEngine.setLoopback(sharedPrefs.getBoolean("local_echo_enabled", false))
 
         // Prepopulate db and set default server on first run
         viewModelScope.launch {

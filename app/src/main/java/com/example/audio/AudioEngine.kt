@@ -84,6 +84,16 @@ class AudioEngine(private val context: Context) {
         Log.d(TAG, "Voice activation threshold set to: $value")
     }
 
+    private var isAgcEnabled = true
+    private val _isAgcEnabledFlow = MutableStateFlow(true)
+    val isAgcEnabledFlow: StateFlow<Boolean> = _isAgcEnabledFlow
+
+    fun setAgcEnabled(enabled: Boolean) {
+        this.isAgcEnabled = enabled
+        _isAgcEnabledFlow.value = enabled
+        Log.d(TAG, "AGC toggled: $enabled")
+    }
+
     // Active scopes & threads
     private var audioJob: Job? = null
     private val engineScope = CoroutineScope(Dispatchers.Default)
@@ -98,6 +108,7 @@ class AudioEngine(private val context: Context) {
             this.isEcoCanvasMode = ecoEnabled
             this.isGameBoosterEnabled = boosterEnabled
             _activeSampleRate.value = rate
+            this.mediaStreamProcessor = MediaStreamTrackProcessor(rate)
             if (_isRecording.value) {
                 stop()
                 start()
@@ -166,8 +177,60 @@ class AudioEngine(private val context: Context) {
 
     // DSP filtering states reusable across blocks
     private val svFilter = SVFilter()
+    private var mediaStreamProcessor = MediaStreamTrackProcessor(sampleRate)
     private var noiseFloorEstimate = 400.0
     private var continuousHumCounter = 0
+
+    // Auto-Gain Control (AGC) state variables
+    private var agcGain = 1.0f
+    private var rmsEnvelope = 1000f
+    private val targetRms = 4500f // Target average amplitude level in 16-bit PCM space
+    private val maxAgcGain = 4.5f
+    private val minAgcGain = 0.35f
+
+    /**
+     * Real-time Automatic Gain Control (AGC).
+     * Normalizes quiet and loud talking levels to a consistent reference target level (targetRms),
+     * using asymmetric time constants for quick attack and slower natural release.
+     */
+    private fun processAGC(buffer: ShortArray, size: Int) {
+        if (!isAgcEnabled || size <= 0) return
+
+        // 1. Compute current block's energy (RMS)
+        var sumSq = 0.0
+        for (i in 0 until size) {
+            val s = buffer[i].toDouble()
+            sumSq += s * s
+        }
+        val blockRms = sqrt(sumSq / size).toFloat()
+
+        // 2. Ignore whispering below voice gate activation standard to prevent hushing/hissing surge
+        if (blockRms < 150f) {
+            // Decay back to neutral gain slowly
+            agcGain = agcGain * 0.98f + 1.0f * 0.02f
+            return
+        }
+
+        // 3. Track the RMS envelope of the speech spectrum with asymmetric integration:
+        // Fast attack (limit loud peaks/yells), slow recovery release (preserve natural syllables)
+        val attackAlpha = 0.20f
+        val releaseAlpha = 0.03f
+        val alpha = if (blockRms > rmsEnvelope) attackAlpha else releaseAlpha
+        rmsEnvelope = rmsEnvelope * (1f - alpha) + blockRms * alpha
+
+        // 4. Determine targeted gain to drive signal to reference level
+        val targetGain = (targetRms / rmsEnvelope).coerceIn(minAgcGain, maxAgcGain)
+
+        // Smoothly update gain value to eliminate audio packet click transients
+        val smoothingFactor = 0.08f
+        agcGain = agcGain * (1f - smoothingFactor) + targetGain * smoothingFactor
+
+        // 5. Apply computed gain factor in-place with hard protection clip limiter
+        for (i in 0 until size) {
+            val sampleVal = buffer[i] * agcGain
+            buffer[i] = sampleVal.coerceIn(-32768f, 32767f).toInt().toShort()
+        }
+    }
 
     /**
      * Real-time software Noise Suppression and Keyboard Click Filter.
@@ -521,6 +584,78 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
+     * MediaStreamTrack processor inspired class to perform basic real-time dynamic spectral gating
+     * and sub-audible mechanical filter clean up on raw microphone audio buffers.
+     */
+    private class MediaStreamTrackProcessor(private val sampleRate: Int) {
+        private var noiseFloor = 350f
+        private val alphaFast = 0.1f
+        private val alphaSlow = 0.01f
+        private var lastOutput = 0f
+        private var lastInput = 0f
+        private var gain = 1.0f
+
+        fun process(buffer: ShortArray, size: Int): ShortArray {
+            if (size <= 0) return buffer
+            
+            // 1. Calculate short-term average amplitude (RMS)
+            var sumSq = 0f
+            for (i in 0 until size) {
+                val s = buffer[i].toFloat()
+                sumSq += s * s
+            }
+            val rms = Math.sqrt((sumSq / size).toDouble()).toFloat()
+            
+            // 2. Track noise floor dynamically using asymmetrical fast/slow filter
+            if (rms < noiseFloor) {
+                noiseFloor = noiseFloor * (1f - alphaFast) + rms * alphaFast
+            } else {
+                noiseFloor = noiseFloor * (1f - alphaSlow) + rms * alphaSlow
+            }
+            
+            // Prevent division by zero, establish minimum threshold
+            val noiseFloorLocal = noiseFloor.coerceAtLeast(10f)
+            
+            // Calculate Signal-to-Noise Ratio (SNR) for the packet
+            val snr = rms / noiseFloorLocal
+            
+            // 3. Apply soft-kneeling dynamic gain reduction based on SNR
+            val targetGain = if (snr < 1.5f) {
+                // Signal matches background noise floor -> apply heavy suppression gate
+                0.08f
+            } else if (snr < 3.0f) {
+                // Transition zone -> linear interpolation of gain
+                0.08f + (snr - 1.5f) * (0.92f / 1.5f)
+            } else {
+                // Clean speech -> clear pass
+                1.0f
+            }
+            
+            // Smooth gain transition to avoid click transients
+            gain = gain * 0.7f + targetGain * 0.3f
+            
+            // 4. Smooth sample process with basic dynamic low-pass smoothing
+            val hpfAlpha = 0.85f // high pass filter to remove sub-audible mechanical/rumble noise (e.g. dc offset)
+            
+            for (i in 0 until size) {
+                val input = buffer[i].toFloat()
+                
+                // Sub-audible low frequency AC coupling HPF (cutoff ~ 80Hz)
+                val hpfOutput = hpfAlpha * (lastOutput + input - lastInput)
+                lastInput = input
+                lastOutput = hpfOutput
+                
+                // Scaled processed audio
+                val processed = hpfOutput * gain
+                
+                buffer[i] = processed.coerceIn(-32768f, 32767f).toInt().toShort()
+            }
+            
+            return buffer
+        }
+    }
+
+    /**
      * Starts the audio connection processing thread.
      */
     @SuppressLint("MissingPermission")
@@ -620,6 +755,12 @@ class AudioEngine(private val context: Context) {
                     if (readResult > 0) {
                         // Apply Noise suppression node (Hardware + Software Gate / Click Killer)
                         processNoiseSuppression(audioBuffer, readResult)
+
+                        // Clean microphone audio using basic MediaStreamTrack processor inspired filter before transmission or voice loopback
+                        mediaStreamProcessor.process(audioBuffer, readResult)
+
+                        // Apply dynamic Automatic Gain Control (AGC) for level normalization
+                        processAGC(audioBuffer, readResult)
 
                         // Apply Voice modulation (Naruto, Obito, Itachi effect presets)
                         processVoiceModulation(audioBuffer, readResult)

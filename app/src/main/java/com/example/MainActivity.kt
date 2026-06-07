@@ -1862,6 +1862,7 @@ else {
         val micVolMultiplier by viewModel.micVolumeMultiplier.collectAsStateWithLifecycle()
         val playVolMultiplier by viewModel.playbackVolumeMultiplier.collectAsStateWithLifecycle()
         val isEchoEnabled by viewModel.isLocalEchoEnabled.collectAsStateWithLifecycle()
+        val isAgcEnabled by viewModel.isAgcEnabled.collectAsStateWithLifecycle()
         val activeVoiceEffect by viewModel.activeVoiceEffect.collectAsStateWithLifecycle()
 
         var tempUsername by remember { mutableStateOf(guestUsername) }
@@ -2135,6 +2136,21 @@ else {
                         Switch(
                             checked = isEchoEnabled,
                             onCheckedChange = { viewModel.toggleLocalEcho() }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-Gain Control (AGC)", fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Dynamically normalize mic volume to keep transmission levels smooth and consistent.", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = isAgcEnabled,
+                            onCheckedChange = { viewModel.toggleAgc() },
+                            modifier = Modifier.testTag("agc_toggle_switch")
                         )
                     }
 
